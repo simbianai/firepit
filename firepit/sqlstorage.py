@@ -47,11 +47,11 @@ logger = logging.getLogger(__name__)
 
 
 def _transform(filename):
-    for obj in raft.get_objects(filename):  #, ['identity', 'observed-data']):
+    for obj in raft.get_objects(filename):  # , ['identity', 'observed-data']):
         # Some identity objects from stix-shifter are missing a `type` property?
-        if 'type' not in obj:
-            obj['type'], _, _ = obj['id'].rpartition('--')
-        if obj['type'] != 'identity':
+        if "type" not in obj:
+            obj["type"], _, _ = obj["id"].rpartition("--")
+        if obj["type"] != "identity":
             for o in raft.flatten(obj):
                 yield o
         else:
@@ -59,67 +59,67 @@ def _transform(filename):
 
 
 def _get_col_dict(store):
-    q = Query('__columns')
+    q = Query("__columns")
     col_dict = defaultdict(list)
     results = store.run_query(q).fetchall()
     for result in results:
-        col_dict[result['otype']].append(result['path'])
+        col_dict[result["otype"]].append(result["path"])
     return col_dict
 
 
 def _format_query(query, dialect):
-    query_text, query_values = query.render('{}', dialect)
+    query_text, query_values = query.render("{}", dialect)
     formatted_values = [f"'{v}'" if isinstance(v, str) else v for v in query_values]
     return query_text.format(*formatted_values)
 
 
 def _make_aggs(group_cols, sco_type, schema):
-    group_colnames = {c.name if hasattr(c, 'name') else c for c in group_cols}
+    group_colnames = {c.name if hasattr(c, "name") else c for c in group_cols}
     aggs = []
     for col in schema:
         # Don't aggregate the columns we used for grouping
-        if col['name'] in group_colnames:
+        if col["name"] in group_colnames:
             continue
-        agg = auto_agg_tuple(sco_type, col['name'], col['type'])
+        agg = auto_agg_tuple(sco_type, col["name"], col["type"])
         if agg:
             aggs.append(agg)
     return Aggregation(aggs)
 
 
 def infer_type(key, value):
-    if key == 'id':
-        rtype = 'TEXT UNIQUE'
-    elif key in ['number_observed', 'src_port', 'dst_port', 'x_firepit_rank']:
-        rtype = 'INTEGER'
-    elif key == 'ipfix.flowId':
-        rtype = 'TEXT'  # Should be uint64, but that's not supported anywhere!
+    if key == "id":
+        rtype = "TEXT UNIQUE"
+    elif key in ["number_observed", "src_port", "dst_port", "x_firepit_rank"]:
+        rtype = "INTEGER"
+    elif key == "ipfix.flowId":
+        rtype = "TEXT"  # Should be uint64, but that's not supported anywhere!
     elif isinstance(value, int):
-        rtype = 'BIGINT'
+        rtype = "BIGINT"
     elif isinstance(value, float):
-        rtype = 'REAL'
+        rtype = "REAL"
     elif isinstance(value, list):
-        rtype = 'TEXT'
+        rtype = "TEXT"
     else:
-        rtype = 'TEXT'
+        rtype = "TEXT"
     return rtype
 
 
 def get_path_joins(viewname, sco_type, column):
     """Determine if `column` has implicit Joins and return them if so"""
     aliases = {sco_type: viewname}
-    links = parse_path(column) if ':' in column else parse_prop(sco_type, column)
+    links = parse_path(column) if ":" in column else parse_prop(sco_type, column)
     target_table = None
     target_column = None
     results = []  # Query components to return
     for link in links:
-        if link[0] == 'node':
+        if link[0] == "node":
             if not target_table:
                 target_table = link[1] or viewname
             if not target_column:
                 target_column = link[2]
             else:
-                target_column += f'.{link[2]}'
-        elif link[0] == 'rel':
+                target_column += f".{link[2]}"
+        elif link[0] == "rel":
             from_type = link[1] or viewname
             ref_name = link[2]
             if target_column:
@@ -127,15 +127,29 @@ def get_path_joins(viewname, sco_type, column):
             to_type = link[3]
             target_table = to_type
             lhs = aliases.get(from_type, from_type)
-            alias, _, _ = ref_name.rpartition('_')
+            alias, _, _ = ref_name.rpartition("_")
             aliases[to_type] = alias
-            if ref_name.endswith('_refs'):
+            if ref_name.endswith("_refs"):
                 # Handle reflist
                 # TODO: need to add ref_name to Join condition?
-                results.append(Join('__reflist', 'id', '=', 'source_ref', lhs=lhs, alias='r'))
-                results.append(Join(to_type, 'target_ref', '=', 'id', lhs='r', alias=alias))
+                results.append(
+                    Join("__reflist", "id", "=", "source_ref", lhs=lhs, alias="r")
+                )
+                results.append(
+                    Join(to_type, "target_ref", "=", "id", lhs="r", alias=alias)
+                )
             else:
-                results.append(Join(to_type, ref_name, '=', 'id', lhs=lhs, alias=alias, how='LEFT OUTER'))
+                results.append(
+                    Join(
+                        to_type,
+                        ref_name,
+                        "=",
+                        "id",
+                        lhs=lhs,
+                        alias=alias,
+                        how="LEFT OUTER",
+                    )
+                )
         target_table = aliases.get(target_table, target_table)
     return results, target_table, target_column
 
@@ -143,67 +157,71 @@ def get_path_joins(viewname, sco_type, column):
 class SqlStorage:
     def __init__(self):
         self.connection = None  # Python DB API connection object
-        self.placeholder = '%s'  # Derived class can override this
-        self.dialect = None      # Derived class can override this
+        self.placeholder = "%s"  # Derived class can override this
+        self.dialect = None  # Derived class can override this
 
         # Functions to use for min/max text.  It can vary - sqlite3
         # uses MIN/MAX, postgresql uses LEAST/GREATEST
-        self.text_min = 'MIN'
-        self.text_max = 'MAX'
+        self.text_min = "MIN"
+        self.text_max = "MAX"
 
         # Function that returns first non-null arg_type
-        self.ifnull = 'IFNULL'
+        self.ifnull = "IFNULL"
 
         # Python-to-SQL type mapper
         self.infer_type = infer_type
 
     def close(self):
         if self.connection:
-            #logger.debug("Closing %s connection",
+            # logger.debug("Closing %s connection",
             #             self.connection.__class__.__module__.split('.', 1)[0])
             self.connection.close()
 
     def _get_writer(self, **kwargs):
         """Get a DB inserter object"""
         # This is DB-specific
-        raise NotImplementedError('SqlStorage._get_writer')
+        raise NotImplementedError("SqlStorage._get_writer")
 
     def _initdb(self, cursor):
         """Do some initial DB setup"""
-        stmt = ('CREATE TABLE IF NOT EXISTS "__metadata" '
-                '(name TEXT, value TEXT);')
+        stmt = 'CREATE TABLE IF NOT EXISTS "__metadata" ' "(name TEXT, value TEXT);"
         self._execute(stmt, cursor)
-        stmt = ('CREATE TABLE IF NOT EXISTS "__symtable" '
-                '(name TEXT, type TEXT, appdata TEXT,'
-                ' UNIQUE(name));')
+        stmt = (
+            'CREATE TABLE IF NOT EXISTS "__symtable" '
+            "(name TEXT, type TEXT, appdata TEXT,"
+            " UNIQUE(name));"
+        )
         self._execute(stmt, cursor)
-        stmt = ('CREATE TABLE IF NOT EXISTS "__queries" '
-                '(sco_id TEXT, query_id TEXT);')
+        stmt = 'CREATE TABLE IF NOT EXISTS "__queries" ' "(sco_id TEXT, query_id TEXT);"
         self._execute(stmt, cursor)
-        stmt = ('CREATE TABLE IF NOT EXISTS "__contains" '
-                '(source_ref TEXT, target_ref TEXT, x_firepit_rank,'
-                ' UNIQUE(source_ref, target_ref) ON CONFLICT IGNORE);')
+        stmt = (
+            'CREATE TABLE IF NOT EXISTS "__contains" '
+            "(source_ref TEXT, target_ref TEXT, x_firepit_rank,"
+            " UNIQUE(source_ref, target_ref) ON CONFLICT IGNORE);"
+        )
         self._execute(stmt, cursor)
-        stmt = ('CREATE TABLE IF NOT EXISTS "__columns" '
-                '(otype TEXT, path TEXT, shortname TEXT, dtype TEXT,'
-                ' UNIQUE(otype, path));')
+        stmt = (
+            'CREATE TABLE IF NOT EXISTS "__columns" '
+            "(otype TEXT, path TEXT, shortname TEXT, dtype TEXT,"
+            " UNIQUE(otype, path));"
+        )
         self._execute(stmt, cursor)
-        self._set_meta(cursor, 'dbversion', DB_VERSION)
+        self._set_meta(cursor, "dbversion", DB_VERSION)
         self.connection.commit()
         cursor.close()
 
     def _checkdb(self):
         dbversion = 0
-        stmt = 'SELECT value FROM "__metadata" WHERE name = \'dbversion\''
+        stmt = "SELECT value FROM \"__metadata\" WHERE name = 'dbversion'"
         try:
             cursor = self._query(stmt)
         except UnknownViewname:
             raise DatabaseMismatch(dbversion, DB_VERSION)
         res = cursor.fetchone()
-        dbversion = res['value'] if res else ""
+        dbversion = res["value"] if res else ""
         if dbversion != DB_VERSION:
             if self._migrate(dbversion, cursor):
-                self._set_meta(cursor, 'dbversion', DB_VERSION)
+                self._set_meta(cursor, "dbversion", DB_VERSION)
             else:
                 raise DatabaseMismatch(dbversion, DB_VERSION)
 
@@ -211,14 +229,18 @@ class SqlStorage:
         return False
 
     def _set_meta(self, cursor, name, value):
-        stmt = ('INSERT INTO "__metadata" (name, value)'
-                f' VALUES ({self.placeholder}, {self.placeholder});')
+        stmt = (
+            'INSERT INTO "__metadata" (name, value)'
+            f" VALUES ({self.placeholder}, {self.placeholder});"
+        )
         cursor.execute(stmt, (name, value))
 
     def _new_name(self, cursor, name, sco_type):
-        stmt = ('INSERT INTO "__symtable" (name, type)'
-                f' VALUES ({self.placeholder}, {self.placeholder})'
-                ' ON CONFLICT (name) DO UPDATE SET type = EXCLUDED.type')
+        stmt = (
+            'INSERT INTO "__symtable" (name, type)'
+            f" VALUES ({self.placeholder}, {self.placeholder})"
+            " ON CONFLICT (name) DO UPDATE SET type = EXCLUDED.type"
+        )
         cursor.execute(stmt, (name, sco_type))
 
     def _drop_name(self, cursor, name):
@@ -227,7 +249,7 @@ class SqlStorage:
 
     def _execute(self, statement, cursor=None):
         """Private wrapper for logging SQL statements"""
-        logger.debug('Executing statement: %s', statement)
+        logger.debug("Executing statement: %s", statement)
         if not cursor:
             cursor = self.connection.cursor()
         cursor.execute(statement)
@@ -235,7 +257,7 @@ class SqlStorage:
 
     def _command(self, cmd, cursor=None):
         """Private wrapper for logging SQL commands"""
-        logger.debug('Executing command: %s', cmd)
+        logger.debug("Executing command: %s", cmd)
         if not cursor:
             cursor = self.connection.cursor()
         cursor.execute(cmd)
@@ -243,7 +265,7 @@ class SqlStorage:
 
     def _query(self, query, values=None, cursor=None):
         """Private wrapper for logging SQL query"""
-        logger.debug('Executing query: %s', query)
+        logger.debug("Executing query: %s", query)
         if not cursor:
             cursor = self.connection.cursor()
         if not values:
@@ -252,17 +274,28 @@ class SqlStorage:
         self.connection.commit()
         return cursor
 
-    def _select(self, tvname, cols="*", sortby=None, groupby=None,
-                ascending=True, limit=None, offset=None, where=None):
+    def _select(
+        self,
+        tvname,
+        cols="*",
+        sortby=None,
+        groupby=None,
+        ascending=True,
+        limit=None,
+        offset=None,
+        where=None,
+    ):
         """Generate a SELECT query on table or view `tvname`"""
         # TODO: Deprecate this in favor of query module
         validate_name(tvname)
         if cols != "*":
-            cols = ", ".join([f'"{col}"' if not col.startswith("'") else col for col in cols])
+            cols = ", ".join(
+                [f'"{col}"' if not col.startswith("'") else col for col in cols]
+            )
 
         stmt = f'SELECT {cols} FROM "{tvname}"'
         if where:
-            stmt += f' WHERE {where}'
+            stmt += f" WHERE {where}"
         if groupby:
             validate_path(groupby)
 
@@ -274,36 +307,41 @@ class SqlStorage:
             sco_type = self.table_type(tvname)
             for col in self.schema(tvname):
                 # Don't aggregate the column we used for grouping
-                if col['name'] == groupby:
+                if col["name"] == groupby:
                     continue
-                agg = auto_agg(sco_type, col['name'], col['type'])
+                agg = auto_agg(sco_type, col["name"], col["type"])
                 if agg:
                     aggs.append(agg)
-            group_cols = ', '.join(aggs)
+            group_cols = ", ".join(aggs)
             stmt = f'SELECT {group_cols} from "{tvname}"'
             stmt += f' GROUP BY "{groupby}"'
         if sortby:
             validate_path(sortby)
-            stmt += f' ORDER BY "{sortby}" ' + ('ASC' if ascending else 'DESC')
+            stmt += f' ORDER BY "{sortby}" ' + ("ASC" if ascending else "DESC")
         if limit:
             if not isinstance(limit, int):
-                raise TypeError('LIMIT must be an integer')
-            stmt += f' LIMIT {limit}'
+                raise TypeError("LIMIT must be an integer")
+            stmt += f" LIMIT {limit}"
         if offset:
             if not isinstance(offset, int):
-                raise TypeError('LIMIT must be an integer')
-            stmt += f' OFFSET {offset}'
+                raise TypeError("LIMIT must be an integer")
+            stmt += f" OFFSET {offset}"
         return stmt
 
     def _create_index(self, tablename, cursor):
-        if tablename in ['__contains', '__reflist', 'relationship']:
-            for col in ['source_ref', 'target_ref']:
-                self._execute(f'CREATE INDEX IF NOT EXISTS "{tablename}_{col}_idx" ON "{tablename}" ("{col}");', cursor)
+        if tablename in ["__contains", "__reflist", "relationship"]:
+            for col in ["source_ref", "target_ref"]:
+                self._execute(
+                    f'CREATE INDEX IF NOT EXISTS "{tablename}_{col}_idx" ON "{tablename}" ("{col}");',
+                    cursor,
+                )
 
     def _create_table(self, tablename, columns):
         stmt = f'CREATE TABLE "{tablename}" ('
-        stmt += ','.join([f'"{colname}" {coltype}' for colname, coltype in columns.items()])
-        stmt += ');'
+        stmt += ",".join(
+            [f'"{colname}" {coltype}' for colname, coltype in columns.items()]
+        )
+        stmt += ");"
         logger.debug('_create_table: "%s"', stmt)
         cursor = self._execute(stmt)
         self._create_index(tablename, cursor)
@@ -317,7 +355,7 @@ class SqlStorage:
 
     def _create_view(self, viewname, select, sco_type, deps=None, cursor=None):
         # This is DB-specific
-        raise NotImplementedError('Storage._create_view')
+        raise NotImplementedError("Storage._create_view")
 
     def _recreate_view(self, viewname, viewdef, cursor):
         self._execute(f'DROP VIEW IF EXISTS "{viewname}"', cursor)
@@ -325,11 +363,11 @@ class SqlStorage:
 
     def _get_view_def(self, viewname):
         # This is DB-specific
-        raise NotImplementedError('Storage._get_view_def')
+        raise NotImplementedError("Storage._get_view_def")
 
     def _is_sql_view(self, name, cursor=None):
         ## This is DB-specific
-        raise NotImplementedError('Storage._is_sql_view')
+        raise NotImplementedError("Storage._is_sql_view")
 
     def path_joins(self, viewname, sco_type, column):
         """Determine if `column` has implicit Joins and return them if so"""
@@ -344,7 +382,7 @@ class SqlStorage:
         try:
             where = stix2sql(pattern, sco_type, self.dialect) if pattern else None
         except Exception as e:
-            logger.error('%s', e)
+            logger.error("%s", e)
             raise StixPatternError(pattern) from e
         if query_id:
             clause = f"query_id = '{query_id}'"
@@ -354,53 +392,75 @@ class SqlStorage:
                 where = clause
 
         # Need to convert viewname from identifier to string, so use single quotes
-        cursor = self._execute('BEGIN;')
-        select = (f'SELECT "{sco_type}".* FROM "{sco_type}" WHERE "id" IN'
-                  f' (SELECT "{sco_type}".id FROM "{sco_type}"'
-                  f'  INNER JOIN __queries ON "{sco_type}".id = __queries.sco_id'
-                  f'  WHERE {where});')
+        cursor = self._execute("BEGIN;")
+        select = (
+            f'SELECT "{sco_type}".* FROM "{sco_type}" WHERE "id" IN'
+            f' (SELECT "{sco_type}".id FROM "{sco_type}"'
+            f'  INNER JOIN __queries ON "{sco_type}".id = __queries.sco_id'
+            f"  WHERE {where});"
+        )
 
-        cursor = self._create_view(viewname, select, sco_type, deps=[tablename], cursor=cursor)
+        cursor = self._create_view(
+            viewname, select, sco_type, deps=[tablename], cursor=cursor
+        )
         self.connection.commit()
         cursor.close()
 
     def _get_excluded(self, colnames, tablename):
         excluded = []
         for col in colnames:
-            if col == 'first_observed':
-                excluded.append(f'first_observed = {self.text_min}("{tablename}".first_observed, EXCLUDED.first_observed)')
-            elif col == 'last_observed':
-                excluded.append(f'last_observed = {self.text_max}("{tablename}".last_observed, EXCLUDED.last_observed)')
-            elif col == 'number_observed':
-                excluded.append(f'number_observed = "{tablename}".number_observed + EXCLUDED.number_observed')
-            elif col == 'id':
+            if col == "first_observed":
+                excluded.append(
+                    f'first_observed = {self.text_min}("{tablename}".first_observed, EXCLUDED.first_observed)'
+                )
+            elif col == "last_observed":
+                excluded.append(
+                    f'last_observed = {self.text_max}("{tablename}".last_observed, EXCLUDED.last_observed)'
+                )
+            elif col == "number_observed":
+                excluded.append(
+                    f'number_observed = "{tablename}".number_observed + EXCLUDED.number_observed'
+                )
+            elif col == "id":
                 continue
             else:
-                excluded.append(f'"{col}" = COALESCE(EXCLUDED."{col}", "{tablename}"."{col}")')
-        return ', '.join(excluded)
+                excluded.append(
+                    f'"{col}" = COALESCE(EXCLUDED."{col}", "{tablename}"."{col}")'
+                )
+        return ", ".join(excluded)
 
     def upsert(self, cursor, tablename, obj, query_id, schema):
-        colnames = [k for k in list(schema.keys()) if k != 'type']
+        colnames = [k for k in list(schema.keys()) if k != "type"]
         excluded = self._get_excluded(colnames, tablename)
-        valnames = ', '.join([f'"{x}"' for x in colnames])
-        placeholders = ', '.join([self.placeholder] * len(colnames))
+        valnames = ", ".join([f'"{x}"' for x in colnames])
+        placeholders = ", ".join([self.placeholder] * len(colnames))
         stmt = f'INSERT INTO "{tablename}" ({valnames}) VALUES ({placeholders})'
-        if 'id' in colnames:
-            if excluded and tablename != 'observed-data':
-                action = f'UPDATE SET {excluded}'
+        if "id" in colnames:
+            if excluded and tablename != "observed-data":
+                action = f"UPDATE SET {excluded}"
             else:
-                action = 'NOTHING'
-            stmt += f' ON CONFLICT (id) DO {action}'
-        values = tuple([ujson.dumps(value, ensure_ascii=False)
-                        if isinstance(value, (list, dict)) else value for value in obj])
-        #logger.debug('_upsert: "%s", %s', stmt, values)
+                action = "NOTHING"
+            stmt += f" ON CONFLICT (id) DO {action}"
+        values = tuple(
+            [
+                (
+                    ujson.dumps(value, ensure_ascii=False)
+                    if isinstance(value, (list, dict))
+                    else value
+                )
+                for value in obj
+            ]
+        )
+        # logger.debug('_upsert: "%s", %s', stmt, values)
         cursor.execute(stmt, values)
 
-        if query_id and 'id' in colnames:
+        if query_id and "id" in colnames:
             # Now add to query table as well
-            idx = colnames.index('id')
-            stmt = (f'INSERT INTO "__queries" (sco_id, query_id)'
-                    f' VALUES ({self.placeholder}, {self.placeholder})')
+            idx = colnames.index("id")
+            stmt = (
+                f'INSERT INTO "__queries" (sco_id, query_id)'
+                f" VALUES ({self.placeholder}, {self.placeholder})"
+            )
             cursor.execute(stmt, (obj[idx], query_id))
 
     def upsert_many(self, cursor, tablename, objs, query_id, schema):
@@ -427,7 +487,7 @@ class SqlStorage:
           batchsize (int): number of objects to insert in 1 batch (defaults to 2000)
 
         """
-        logger.debug('Caching %s', query_id)
+        logger.debug("Caching %s", query_id)
 
         if not isinstance(bundles, list):
             bundles = [bundles]
@@ -438,7 +498,7 @@ class SqlStorage:
         # walk the bundles and figure out all the columns
         for bundle in bundles:
             if isinstance(bundle, str):
-                logger.debug('- Caching %s', bundle)
+                logger.debug("- Caching %s", bundle)
             for obj in _transform(bundle):
                 splitter.write(obj)
         splitter.close()
@@ -452,19 +512,21 @@ class SqlStorage:
         query = Query(on)
         if by:
             validate_path(by)
-            sco_type, _, by = by.rpartition(':')
+            sco_type, _, by = by.rpartition(":")
             target_column = by
             if by not in self.columns(on):
                 joins, _, target_column = self.path_joins(on, sco_type, by)
                 query.extend(joins)
-        if op == 'sort':
-            query.append(Order([(target_column, Order.ASC if ascending else Order.DESC)]))
+        if op == "sort":
+            query.append(
+                Order([(target_column, Order.ASC if ascending else Order.DESC)])
+            )
             if limit:
                 query.append(Limit(limit))
-            #query.append(Projection(self.columns(on)))  # Is this necessary?
+            # query.append(Projection(self.columns(on)))  # Is this necessary?
             cols = [Column(c, table=on) for c in self.columns(on)]
             query.append(Projection(cols))  # Is this necessary?
-        elif op == 'group':
+        elif op == "group":
             query.append(Group([Column(target_column, alias=by)]))
         self.assign_query(viewname, query)
 
@@ -473,8 +535,8 @@ class SqlStorage:
         validate_name(viewname)
         if not query_id:
             # Look inside data
-            if 'query_id' in objects[0]:
-                query_id = objects[0]['query_id']
+            if "query_id" in objects[0]:
+                query_id = objects[0]["query_id"]
             else:
                 query_id = str(uuid.uuid4())
         writer = self._get_writer(query_id=query_id)
@@ -483,21 +545,21 @@ class SqlStorage:
         for obj in objects:
             if not sco_type:
                 # objects MUST be dicts with a type
-                if 'type' not in obj:
-                    raise InvalidObject('missing `type`')
-                sco_type = obj['type']
+                if "type" not in obj:
+                    raise InvalidObject("missing `type`")
+                sco_type = obj["type"]
             if isinstance(obj, str):
-                obj = {'type': sco_type, primary_prop(sco_type): obj}
+                obj = {"type": sco_type, primary_prop(sco_type): obj}
             elif not isinstance(obj, dict):
-                raise InvalidObject('Unknown data format')
-            if 'type' not in obj:
-                obj['type'] = sco_type
-            if 'id' not in obj or not preserve_ids:
-                obj['id'] = makeid(obj)
+                raise InvalidObject("Unknown data format")
+            if "type" not in obj:
+                obj["type"] = sco_type
+            if "id" not in obj or not preserve_ids:
+                obj["id"] = makeid(obj)
             splitter.write(obj)
         splitter.close()
 
-        self.extract(viewname, sco_type, query_id, '')
+        self.extract(viewname, sco_type, query_id, "")
 
         return sco_type
 
@@ -510,11 +572,11 @@ class SqlStorage:
         if not objects:
             return
 
-        cursor = self._execute('BEGIN;')
-        if 'id' not in objects[0]:
+        cursor = self._execute("BEGIN;")
+        if "id" not in objects[0]:
             # Maybe it's aggregates?  Do "copy-on-write"
             self._execute(f'DROP VIEW IF EXISTS "{viewname}"', cursor)
-            columns = [key for key in objects[0].keys() if key != 'type']
+            columns = [key for key in objects[0].keys() if key != "type"]
             schema = {}
             for col in columns:
                 schema[col] = self.infer_type(col, objects[0][col])
@@ -526,12 +588,12 @@ class SqlStorage:
             writer = self._get_writer()
             splitter = SplitWriter(writer, batchsize=1000, replace=True)
             for obj in unresolve(objects):
-                if 'type' not in obj:
-                    raise InvalidObject('missing `type`')
+                if "type" not in obj:
+                    raise InvalidObject("missing `type`")
                 elif not isinstance(obj, dict):
-                    raise InvalidObject('Unknown data format')
-                if 'id' not in obj:
-                    raise InvalidObject('missing `id`')
+                    raise InvalidObject("Unknown data format")
+                if "id" not in obj:
+                    raise InvalidObject("missing `id`")
                 splitter.write(obj)
             splitter.close()
             viewdef = self._get_view_def(viewname)
@@ -547,8 +609,8 @@ class SqlStorage:
         validate_path(r_on)
         l_cols = set(self.columns(l_var))
         r_cols = set(self.columns(r_var))
-        l_type, _, l_on = l_on.rpartition(':')
-        r_type, _, r_on = r_on.rpartition(':')
+        l_type, _, l_on = l_on.rpartition(":")
+        r_type, _, r_on = r_on.rpartition(":")
         cols = set()
         for col in l_cols - r_cols:
             cols.add(f'{l_var}."{col}" AS "{col}"')
@@ -556,10 +618,12 @@ class SqlStorage:
             cols.add(f'{self.ifnull}({l_var}."{col}", {r_var}."{col}") AS "{col}"')
         for col in r_cols - l_cols:
             cols.add(f'{r_var}."{col}" as "{col}"')
-        scols = ', '.join(cols)
-        stmt = (f'SELECT {scols} FROM'
-                f' {l_var} INNER JOIN {r_var}'
-                f' ON {l_var}."{l_on}" = {r_var}."{r_on}"')
+        scols = ", ".join(cols)
+        stmt = (
+            f"SELECT {scols} FROM"
+            f" {l_var} INNER JOIN {r_var}"
+            f' ON {l_var}."{l_on}" = {r_var}."{r_on}"'
+        )
         sco_type = self.table_type(l_var)
         cursor = self._create_view(viewname, stmt, sco_type, deps=[l_var, r_var])
         self.connection.commit()
@@ -572,8 +636,9 @@ class SqlStorage:
 
         """
         validate_name(viewname)
-        logger.debug('Extract %s as %s from %s with %s',
-                     sco_type, viewname, query_id, pattern)
+        logger.debug(
+            "Extract %s as %s from %s with %s", sco_type, viewname, query_id, pattern
+        )
         self._extract(viewname, sco_type, sco_type, pattern, query_id)
 
     def filter(self, viewname, sco_type, input_view, pattern):
@@ -584,17 +649,18 @@ class SqlStorage:
         """
         validate_name(viewname)
         validate_name(input_view)
-        logger.debug('Filter %s as %s from %s with %s',
-                     sco_type, viewname, input_view, pattern)
+        logger.debug(
+            "Filter %s as %s from %s with %s", sco_type, viewname, input_view, pattern
+        )
         slct = self._get_view_def(input_view)
         try:
             where = stix2sql(pattern, sco_type, self.dialect) if pattern else None
         except Exception as e:
-            logger.error('%s', e)
+            logger.error("%s", e)
             raise StixPatternError(pattern) from e
-        slct = f'SELECT * FROM ({slct}) AS tmp'
+        slct = f"SELECT * FROM ({slct}) AS tmp"
         if where:
-            slct += f' WHERE {where}'
+            slct += f" WHERE {where}"
         cursor = self._create_view(viewname, slct, sco_type, deps=[input_view])
         self.connection.commit()
         cursor.close()
@@ -606,7 +672,7 @@ class SqlStorage:
         # TODO: Identify when we actually need this - it's not clear,
         #       and it breaks sorting by referenced properties.
         viewdef = self._get_view_def(viewname)
-        logger.debug('viewname %s: %s', viewname, viewdef)
+        logger.debug("viewname %s: %s", viewname, viewdef)
         match = re.search(r"ORDER BY \"([a-z0-9:'\._\-]*)\" (ASC|DESC)$", viewdef)
         if match:
             if "_ref." in match.group(1):
@@ -631,7 +697,9 @@ class SqlStorage:
                         validate_path(col)
                     except InvalidStixPath as e:
                         raise InvalidAttr(f"{col}") from e
-                    joins, target_table, target_column = self.path_joins(viewname, None, col)
+                    joins, target_table, target_column = self.path_joins(
+                        viewname, None, col
+                    )
                     qry.extend(joins)
                     proj.append(Column(target_column, table=target_table, alias=col))
                 else:
@@ -659,23 +727,27 @@ class SqlStorage:
         cursor = self.run_query(qry)
         results = cursor.fetchall()
         sco_type = self.table_type(viewname) or viewname
-        if 'type' in cols or cols == '*':
+        if "type" in cols or cols == "*":
             for result in results:
-                result['type'] = sco_type
+                result["type"] = sco_type
         return results
 
     def values(self, path, viewname):
         """Get the values of STIX object path `path` (a column) from `viewname`"""
         validate_path(path)
         validate_name(viewname)
-        sco_type, _, column = path.rpartition(':')
+        sco_type, _, column = path.rpartition(":")
         if not sco_type:
             sco_type = viewname  # TODO: verify this is OK to do
         qry = Query(viewname)
         if column not in self.columns(viewname):
-            joins, target_table, target_column = self.path_joins(viewname, sco_type, column)
+            joins, target_table, target_column = self.path_joins(
+                viewname, sco_type, column
+            )
             qry.extend(joins)
-            qry.append(Projection([Column(target_column, table=target_table, alias=column)]))
+            qry.append(
+                Projection([Column(target_column, table=target_table, alias=column)])
+            )
         else:
             qry.append(Projection([column]))
         cursor = self.run_query(qry)
@@ -693,19 +765,19 @@ class SqlStorage:
     def tables(self):
         """Get all table names"""
         # This is DB-specific
-        raise NotImplementedError('Storage.tables')
+        raise NotImplementedError("Storage.tables")
 
     def types(self, private=False):
         """Get all table names that correspond to SCO types"""
         # This is DB-specific
-        raise NotImplementedError('Storage.types')
+        raise NotImplementedError("Storage.types")
 
     def views(self):
         """Get all view names"""
-        stmt = 'SELECT name FROM __symtable'
+        stmt = "SELECT name FROM __symtable"
         cursor = self._query(stmt)
         result = cursor.fetchall()
-        return [row['name'] for row in result]
+        return [row["name"] for row in result]
 
     def table_type(self, viewname):
         """Get the SCO type for table/view `viewname`"""
@@ -718,7 +790,7 @@ class SqlStorage:
     def columns(self, viewname):
         """Get the column names (properties) of `viewname`"""
         # This is DB-specific
-        raise NotImplementedError('Storage.columns')
+        raise NotImplementedError("Storage.columns")
 
     def schema(self, viewname=None):
         """
@@ -726,18 +798,20 @@ class SqlStorage:
         tables if not specified
         """
         # This is DB-specific
-        raise NotImplementedError('Storage.schema')
+        raise NotImplementedError("Storage.schema")
 
     def delete(self):
         """Delete ALL data in this store"""
         # This is DB-specific
-        raise NotImplementedError('Storage.delete')
+        raise NotImplementedError("Storage.delete")
 
     def set_appdata(self, viewname, data):
         """Attach app-specific data to a viewname"""
         validate_name(viewname)
-        stmt = (f'UPDATE "__symtable" SET appdata = {self.placeholder}'
-                f' WHERE name = {self.placeholder};')
+        stmt = (
+            f'UPDATE "__symtable" SET appdata = {self.placeholder}'
+            f" WHERE name = {self.placeholder};"
+        )
         values = (data, viewname)
         cursor = self._query(stmt, values=values)
         cursor.close()
@@ -752,14 +826,14 @@ class SqlStorage:
         cursor.close()
         if not res:
             return None
-        if 'appdata' in res:
-            return res['appdata']
+        if "appdata" in res:
+            return res["appdata"]
         return res[0]
 
     def get_view_data(self, viewnames=None):
         """Retrieve information about one or more viewnames"""
         if viewnames:
-            placeholders = ', '.join([self.placeholder] * len(viewnames))
+            placeholders = ", ".join([self.placeholder] * len(viewnames))
             stmt = f'SELECT * FROM "__symtable" WHERE name IN ({placeholders});'
             values = tuple(viewnames)
         else:
@@ -782,11 +856,11 @@ class SqlStorage:
             validate_name(name)
             types.add(self.table_type(name))
             viewdef = self._get_view_def(name)
-            logger.debug('merge: %s -> %s', name, viewdef)
+            logger.debug("merge: %s -> %s", name, viewdef)
             selects.append(viewdef)
         if len(types) > 1:
-            raise IncompatibleType('cannot merge types ' + ', '.join(types))
-        stmt = ' UNION '.join(selects)
+            raise IncompatibleType("cannot merge types " + ", ".join(types))
+        stmt = " UNION ".join(selects)
         sco_type = self.table_type(input_views[0])
         cursor = self._create_view(viewname, stmt, sco_type, deps=input_views)
         self.connection.commit()
@@ -795,7 +869,7 @@ class SqlStorage:
     def remove_view(self, viewname):
         """Remove view `viewname`"""
         validate_name(viewname)
-        cursor = self._execute('BEGIN;')
+        cursor = self._execute("BEGIN;")
         self._execute(f'DROP VIEW IF EXISTS "{viewname}";', cursor)
         self._drop_name(cursor, viewname)
         self.connection.commit()
@@ -807,7 +881,7 @@ class SqlStorage:
         validate_name(newname)
         view_type = self.table_type(oldname)
         view_def = self._get_view_def(oldname)
-        cursor = self._execute('BEGIN;')
+        cursor = self._execute("BEGIN;")
 
         # Need to remove `newname` if it already exists
         self._drop_name(cursor, newname)
@@ -836,7 +910,7 @@ class SqlStorage:
         schema = None
         if not sco_type:
             sco_type = self.table_type(on)
-            logger.debug('Deduced type of %s as %s', viewname, sco_type)
+            logger.debug("Deduced type of %s as %s", viewname, sco_type)
         if query.groupby:
             if not bool(query.aggs) and sco_type:
                 schema = self.schema(sco_type)
@@ -846,7 +920,7 @@ class SqlStorage:
                     query.aggs = _make_aggs(query.groupby.cols, sco_type, schema)
 
         stmt = _format_query(query, self.dialect)
-        logger.debug('assign_query: %s', stmt)
+        logger.debug("assign_query: %s", stmt)
         cursor = self._create_view(viewname, stmt, sco_type, deps=deps)
         self.connection.commit()
         cursor.close()
@@ -857,19 +931,20 @@ class SqlStorage:
         Returns list of dicts like {'{column}': '...', 'count': 1}
         """
         validate_name(viewname)
-        _, _, column = path.rpartition(':')
+        _, _, column = path.rpartition(":")
 
-        qry = Query([
-            Table(viewname),
-            Join('__contains', 'id', '=', 'target_ref'),
-            Join('observed-data', 'source_ref', '=', 'id'),
-        ])
+        qry = Query(
+            [
+                Table(viewname),
+                Join("__contains", "id", "=", "target_ref"),
+                Join("observed-data", "source_ref", "=", "id"),
+            ]
+        )
         joins, table, col = self.path_joins(viewname, None, path)
         qry.extend(joins)
-        qry.extend([
-            Group([Column(col, table, path)]),
-            Aggregation([('COUNT', '*', 'count')])
-        ])
+        qry.extend(
+            [Group([Column(col, table, path)]), Aggregation([("COUNT", "*", "count")])]
+        )
         cursor = self.run_query(qry)
         return cursor.fetchall()
 
@@ -881,7 +956,7 @@ class SqlStorage:
             cursor.close()
         except UnknownViewname as e:
             # Probably __contains, if no observed-data has been loaded
-            logger.warning('Missing table: %s', e)
+            logger.warning("Missing table: %s", e)
             res = None
         except InvalidAttr:
             # Probably a "grouped"/aggregate POD table (no id)
@@ -893,41 +968,40 @@ class SqlStorage:
         Get the count of observations of `value` in `viewname`.`path`
         Returns integer count
         """
-        qry = Query([
-            Table(viewname),
-            Join('__contains', 'id', '=', 'target_ref'),
-            Join('observed-data', 'source_ref', '=', 'id')
-        ])
+        qry = Query(
+            [
+                Table(viewname),
+                Join("__contains", "id", "=", "target_ref"),
+                Join("observed-data", "source_ref", "=", "id"),
+            ]
+        )
         joins, _, col = self.path_joins(viewname, None, path)
         qry.extend(joins)
         if value:
-            qry.append(Filter([Predicate(col, '=', value)]))
-        qry.append(Aggregation([('SUM', 'number_observed', 'count')]))
+            qry.append(Filter([Predicate(col, "=", value)]))
+        qry.append(Aggregation([("SUM", "number_observed", "count")]))
         res = self._query_one(qry)
         if res:
-            count = int(res['count']) if res['count'] else 0
+            count = int(res["count"]) if res["count"] else 0
         else:
             count = self.count(viewname)
         return count
-        
+
     def extract_observeddata_attribute(
-            self,
-            viewname,
-            name_of_attribute,
-            path=None,
-            value=None,
-            limit=None,
-            run=True):
+        self, viewname, name_of_attribute, path=None, value=None, limit=None, run=True
+    ):
         """
         Get the observations of `value` in `viewname`.`path`
         Returns list of dicts like {'name_of_attribute': '...', '{column}': '...'}
         `name_of_attribute` can be a str or list of str (to get multiple attrs)
         """
-        qry = Query([
-            Table(viewname),
-            Join('__contains', 'id', '=', 'target_ref'),
-            Join('observed-data', 'source_ref', '=', 'id')
-        ])
+        qry = Query(
+            [
+                Table(viewname),
+                Join("__contains", "id", "=", "target_ref"),
+                Join("observed-data", "source_ref", "=", "id"),
+            ]
+        )
         table = viewname
         if path:
             if isinstance(path, (list, tuple)):
@@ -941,28 +1015,28 @@ class SqlStorage:
             column = None
         proj = []
         for p in paths:
-            if p == '*':
+            if p == "*":
                 continue
             joins, table, column = self.path_joins(viewname, None, p)
             qry.extend(joins)
             proj.append(Column(column, table, p))
         if column and value is not None:
-            qry.append(Filter([Predicate(column, '=', value)]))
+            qry.append(Filter([Predicate(column, "=", value)]))
         if isinstance(name_of_attribute, str):
             attrs = [name_of_attribute]
         elif isinstance(name_of_attribute, list):
             attrs = name_of_attribute
         else:
-            raise TypeError('name_of_attribute must be str or list[str]')
+            raise TypeError("name_of_attribute must be str or list[str]")
         new_cols = []
         for attr in attrs:
-            if attr == 'id':
-                new_cols.append(Column(attr, 'observed-data', 'observation_id'))
+            if attr == "id":
+                new_cols.append(Column(attr, "observed-data", "observation_id"))
             else:
-                new_cols.append(Column(attr, 'observed-data'))
+                new_cols.append(Column(attr, "observed-data"))
         qry.append(Order(new_cols))
         if not proj:
-            proj = [Column('*', viewname)]
+            proj = [Column("*", viewname)]
         qry.append(Projection(new_cols + proj))
         if limit:
             qry.append(Limit(limit))
@@ -973,56 +1047,63 @@ class SqlStorage:
             cursor.close()
         else:
             res = qry
-        return res    
-    
+        return res
+
     def timestamped(
-            self,
-            viewname,
-            path=None,
-            value=None,
-            timestamp='first_observed',
-            limit=None,
-            run=True):
+        self,
+        viewname,
+        path=None,
+        value=None,
+        timestamp="first_observed",
+        limit=None,
+        run=True,
+    ):
         """
         Get the timestamped observations of `value` in `viewname`.`path`
         Returns list of dicts like {'timestamp': '2021-10-...', '{column}': '...'}
         """
-        return self.extract_observeddata_attribute(viewname, timestamp, path, value, limit, run)
+        return self.extract_observeddata_attribute(
+            viewname, timestamp, path, value, limit, run
+        )
 
     def summary(self, viewname, path=None, value=None):
         """
         Get the first and last observed time and number observed for observations of `viewname`, optionally specifying `path` and `value`.
         Returns list of dicts like {'first_observed': '2021-10-...', 'last_observed': '2021-10-...', 'number_observed': N}
         """
-        qry = Query([
-            Table(viewname),
-            Join('__contains', 'id', '=', 'target_ref'),
-            Join('observed-data', 'source_ref', '=', 'id')
-        ])
+        qry = Query(
+            [
+                Table(viewname),
+                Join("__contains", "id", "=", "target_ref"),
+                Join("observed-data", "source_ref", "=", "id"),
+            ]
+        )
         column = path
         if path:
             joins, _, column = self.path_joins(viewname, None, path)
             qry.extend(joins)
         if column and value is not None:
-            qry.append(Filter([Predicate(column, '=', value)]))
-        first_observed = Column('first_observed', 'observed-data')
-        last_observed = Column('last_observed', 'observed-data')
-        number_observed = Column('number_observed', 'observed-data')
+            qry.append(Filter([Predicate(column, "=", value)]))
+        first_observed = Column("first_observed", "observed-data")
+        last_observed = Column("last_observed", "observed-data")
+        number_observed = Column("number_observed", "observed-data")
         qry.append(
-            Aggregation([
-                ('MIN', first_observed, 'first_observed'),
-                ('MAX', last_observed, 'last_observed'),
-                ('SUM', number_observed, 'number_observed'),
-            ])
+            Aggregation(
+                [
+                    ("MIN", first_observed, "first_observed"),
+                    ("MAX", last_observed, "last_observed"),
+                    ("SUM", number_observed, "number_observed"),
+                ]
+            )
         )
         res = self._query_one(qry)
-        if not res or res['number_observed'] is None:
+        if not res or res["number_observed"] is None:
             c = self.count(viewname)
-            res = {'first_observed': None, 'last_observed': None, 'number_observed': c}
-        elif res['number_observed'] is not None:
-            res['number_observed'] = int(res['number_observed'])  # Convert from Decimal
+            res = {"first_observed": None, "last_observed": None, "number_observed": c}
+        elif res["number_observed"] is not None:
+            res["number_observed"] = int(res["number_observed"])  # Convert from Decimal
         else:
-            res['number_observed'] = 0
+            res["number_observed"] = 0
         return res
 
     def group(self, newname, viewname, by, aggs=None):
@@ -1051,16 +1132,16 @@ class SqlStorage:
             sco_type = self.table_type(viewname)
             for col in self.schema(sco_type):
                 # Don't aggregate the columns we used for grouping
-                if col['name'] in group_colnames:
+                if col["name"] in group_colnames:
                     continue
-                agg = auto_agg_tuple(sco_type, col['name'], col['type'])
+                agg = auto_agg_tuple(sco_type, col["name"], col["type"])
                 if agg:
                     aggs.append(agg)
         else:
             tmp = []
             for agg in aggs:
                 func, attr, alias = agg
-                if attr not in columns and attr != '*':
+                if attr not in columns and attr != "*":
                     joins, table, colname = self.path_joins(viewname, None, attr)
                     tmp.append((func, Column(colname, table), alias))
                     if table not in joined:
