@@ -11,10 +11,19 @@ from firepit.exceptions import DuplicateTable
 from firepit.exceptions import InvalidAttr
 from firepit.exceptions import UnexpectedError
 from firepit.exceptions import UnknownViewname
-from firepit.pgcommon import (CHECK_FOR_COMMON_SCHEMA, COLUMNS_TABLE,
-                              CHECK_FOR_QUERIES_TABLE, INTERNAL_TABLES,
-                              LIKE_BIN, MATCH_BIN, MATCH_FUN, SUBNET_FUN,
-                              _rewrite_view_def, _infer_type, pg_shorten)
+from firepit.pgcommon import (
+    CHECK_FOR_COMMON_SCHEMA,
+    COLUMNS_TABLE,
+    CHECK_FOR_QUERIES_TABLE,
+    INTERNAL_TABLES,
+    LIKE_BIN,
+    MATCH_BIN,
+    MATCH_FUN,
+    SUBNET_FUN,
+    _rewrite_view_def,
+    _infer_type,
+    pg_shorten,
+)
 from firepit.splitter import SqlWriter
 from firepit.sqlstorage import DB_VERSION
 from firepit.sqlstorage import SqlStorage
@@ -24,24 +33,21 @@ logger = logging.getLogger(__name__)
 
 
 def get_storage(url, session_id):
-    dbname = url.path.lstrip('/')
+    dbname = url.path.lstrip("/")
     return PgStorage(dbname, url.geturl(), session_id)
 
 
 # PostgreSQL defaults for COPY text format
-SEP = '\t'
-TEXT_ESCAPE_TABLE = str.maketrans({
-    '\\': '\\\\',
-    '\n': '\\n',
-    '\r': '\\r',
-    SEP: f'\\{SEP}'
-})
+SEP = "\t"
+TEXT_ESCAPE_TABLE = str.maketrans(
+    {"\\": "\\\\", "\n": "\\n", "\r": "\\r", SEP: f"\\{SEP}"}
+)
 
 
 @lru_cache(maxsize=256, typed=True)
 def _text_encode(value):
     if value is None:
-        return r'\N'
+        return r"\N"
     elif not isinstance(value, str):
         return str(value)
     # MUST "escape" special chars
@@ -58,21 +64,27 @@ class ListToTextIO:
         self.it = iter(objs)
         self.cols = cols
         self.sep = sep
-        self.buf = ''
+        self.buf = ""
 
     def read(self, n):
-        result = ''
+        result = ""
         try:
             while n > len(self.buf):
                 obj = next(self.it)
-                vals = [ujson.dumps(val, ensure_ascii=False) if isinstance(val, (list, dict))
-                        else _text_encode(val) for val in obj]
-                self.buf += self.sep.join(vals) + '\n'
+                vals = [
+                    (
+                        ujson.dumps(val, ensure_ascii=False)
+                        if isinstance(val, (list, dict))
+                        else _text_encode(val)
+                    )
+                    for val in obj
+                ]
+                self.buf += self.sep.join(vals) + "\n"
             result = self.buf[:n]
             self.buf = self.buf[n:]
         except StopIteration:
             result = self.buf
-            self.buf = ''
+            self.buf = ""
         return result
 
 
@@ -85,43 +97,43 @@ class TuplesToTextIO:
         self.it = iter(objs)
         self.cols = cols
         self.sep = sep
-        self.buf = ''
+        self.buf = ""
 
     def read(self, n):
-        result = ''
+        result = ""
         try:
             while n > len(self.buf):
                 obj = next(self.it)
                 self.buf += self.sep.join(obj)
-                self.buf += '\n'
+                self.buf += "\n"
             result = self.buf[:n]
             self.buf = self.buf[n:]
         except StopIteration:
             result = self.buf
-            self.buf = ''
+            self.buf = ""
         return result
 
 
 class PgStorage(SqlStorage):
     def __init__(self, dbname, url, session_id=None):
         super().__init__()
-        self.placeholder = '%s'
-        self.dialect = 'postgresql'
-        self.text_min = 'LEAST'
-        self.text_max = 'GREATEST'
-        self.ifnull = 'COALESCE'
+        self.placeholder = "%s"
+        self.dialect = "postgresql"
+        self.text_min = "LEAST"
+        self.text_max = "GREATEST"
+        self.ifnull = "COALESCE"
         self.dbname = dbname
         self.infer_type = _infer_type
         self.defer_index = False
         if not session_id:
-            session_id = 'firepit'
+            session_id = "firepit"
         self.session_id = session_id
-        options = f'options=--search-path%3D{session_id}'
-        sep = '&' if '?' in url else '?'
-        connstring = f'{url}{sep}{options}'
+        options = f"options=--search-path%3D{session_id}"
+        sep = "&" if "?" in url else "?"
+        connstring = f"{url}{sep}{options}"
         self.connection = psycopg2.connect(
-            connstring,
-            cursor_factory=psycopg2.extras.RealDictCursor)
+            connstring, cursor_factory=psycopg2.extras.RealDictCursor
+        )
 
         self._create_firepit_common_schema()
         if session_id:
@@ -147,7 +159,7 @@ class PgStorage(SqlStorage):
             res = self._query(CHECK_FOR_COMMON_SCHEMA).fetchall()
             if not res:
                 self._execute('CREATE SCHEMA IF NOT EXISTS "firepit_common";')
-                cursor = self._execute('BEGIN;')
+                cursor = self._execute("BEGIN;")
                 self._execute(MATCH_FUN, cursor=cursor)
                 self._execute(MATCH_BIN, cursor=cursor)
                 self._execute(LIKE_BIN, cursor=cursor)
@@ -155,25 +167,25 @@ class PgStorage(SqlStorage):
                 cursor.close()
             elif len(res) < 4:
                 # Might need to add new functions
-                cursor = self._execute('BEGIN;')
-                funcs = [r['routine_name'] for r in res]
-                if 'match_bin' not in funcs:
+                cursor = self._execute("BEGIN;")
+                funcs = [r["routine_name"] for r in res]
+                if "match_bin" not in funcs:
                     self._execute(MATCH_BIN, cursor=cursor)
-                if 'like_bin' not in funcs:
+                if "like_bin" not in funcs:
                     self._execute(LIKE_BIN, cursor=cursor)
                 cursor.close()
         except psycopg2.errors.DuplicateFunction:
             self.connection.rollback()
 
     def _setup(self):
-        cursor = self._execute('BEGIN;')
+        cursor = self._execute("BEGIN;")
         try:
             # Do DB initization from base class
             for stmt in INTERNAL_TABLES:
                 self._execute(stmt, cursor)
 
             # Record db version
-            self._set_meta(cursor, 'dbversion', DB_VERSION)
+            self._set_meta(cursor, "dbversion", DB_VERSION)
 
             self.connection.commit()
             cursor.close()
@@ -182,34 +194,38 @@ class PgStorage(SqlStorage):
             self.connection.rollback()
 
     def _migrate(self, version, cursor):
-        if version == '2':
+        if version == "2":
             self._execute(COLUMNS_TABLE, cursor)
-            version = '2.1'
-        if version == '2.1':
+            version = "2.1"
+        if version == "2.1":
             # Add unique contraint to __symtable
             # First de-dup the table
             data = self.get_view_data()
             views = {}
             for row in data:
-                views[row['name']] = row
-            cursor = self._execute('BEGIN;')
-            self._execute('DROP TABLE __symtable', cursor)
-            stmt = ('CREATE UNLOGGED TABLE IF NOT EXISTS "__symtable" '
-                    '(name TEXT, type TEXT, appdata TEXT,'
-                    ' UNIQUE(name));')
+                views[row["name"]] = row
+            cursor = self._execute("BEGIN;")
+            self._execute("DROP TABLE __symtable", cursor)
+            stmt = (
+                'CREATE UNLOGGED TABLE IF NOT EXISTS "__symtable" '
+                "(name TEXT, type TEXT, appdata TEXT,"
+                " UNIQUE(name));"
+            )
             self._execute(stmt, cursor)
             for view in views.values():
-                stmt = (f'INSERT INTO "__symtable" (name, type, appdata)'
-                        f' VALUES ({self.placeholder}, {self.placeholder}, {self.placeholder})')
-                cursor.execute(stmt, (view['name'], view['type'], view['appdata']))
+                stmt = (
+                    f'INSERT INTO "__symtable" (name, type, appdata)'
+                    f" VALUES ({self.placeholder}, {self.placeholder}, {self.placeholder})"
+                )
+                cursor.execute(stmt, (view["name"], view["type"], view["appdata"]))
             self.connection.commit()
             cursor.close()
-            version = '2.2'
+            version = "2.2"
         return version == DB_VERSION
 
     def _get_writer(self, **kwargs):
         """Get a DB inserter object"""
-        self.defer_index = kwargs.get('defer_index', self.defer_index)
+        self.defer_index = kwargs.get("defer_index", self.defer_index)
         filedir = os.path.dirname(self.dbname)
         return SqlWriter(
             filedir,
@@ -217,12 +233,12 @@ class PgStorage(SqlStorage):
             placeholder=self.placeholder,
             infer_type=_infer_type,
             shorten=pg_shorten,
-            **kwargs
+            **kwargs,
         )
 
     def _query(self, query, values=None, cursor=None):
         """Private wrapper for logging SQL query"""
-        logger.debug('Executing query: %s', query)
+        logger.debug("Executing query: %s", query)
         if not cursor:
             cursor = self.connection.cursor()
         if not values:
@@ -237,7 +253,7 @@ class PgStorage(SqlStorage):
             raise UnknownViewname(str(e)) from e
         except Exception as e:
             self.connection.rollback()
-            logger.error('%s: %s', query, e, exc_info=e)
+            logger.error("%s: %s", query, e, exc_info=e)
             raise UnexpectedError(str(e)) from e
         self.connection.commit()
         return cursor
@@ -245,8 +261,10 @@ class PgStorage(SqlStorage):
     def _create_table(self, tablename, columns):
         # Same as base class, but disable WAL
         stmt = f'CREATE UNLOGGED TABLE "{tablename}" ('
-        stmt += ','.join([f'"{colname}" {coltype}' for colname, coltype in columns.items()])
-        stmt += ');'
+        stmt += ",".join(
+            [f'"{colname}" {coltype}' for colname, coltype in columns.items()]
+        )
+        stmt += ");"
         logger.debug('_create_table: "%s"', stmt)
         try:
             cursor = self._execute(stmt)
@@ -254,9 +272,11 @@ class PgStorage(SqlStorage):
                 self._create_index(tablename, cursor)
             self.connection.commit()
             cursor.close()
-        except (psycopg2.errors.DuplicateTable,
-                psycopg2.errors.DuplicateObject,
-                psycopg2.errors.UniqueViolation) as e:
+        except (
+            psycopg2.errors.DuplicateTable,
+            psycopg2.errors.DuplicateObject,
+            psycopg2.errors.UniqueViolation,
+        ) as e:
             self.connection.rollback()
             raise DuplicateTable(tablename) from e
 
@@ -271,16 +291,16 @@ class PgStorage(SqlStorage):
             self.connection.rollback()
 
         # update all relevant viewdefs
-        stmt = 'SELECT name, type FROM __symtable'
+        stmt = "SELECT name, type FROM __symtable"
         cursor = self._query(stmt, (tablename,))
         rows = cursor.fetchall()
         for row in rows:
-            logger.debug('%s', row)
-        stmt = 'SELECT name FROM __symtable WHERE type = %s'
+            logger.debug("%s", row)
+        stmt = "SELECT name FROM __symtable WHERE type = %s"
         cursor = self._query(stmt, (tablename,))
         rows = cursor.fetchall()
         for row in rows:
-            viewname = row['name']
+            viewname = row["name"]
             viewdef = self._get_view_def(viewname)
             self._execute(f'CREATE OR REPLACE VIEW "{viewname}" AS {viewdef}', cursor)
 
@@ -288,37 +308,38 @@ class PgStorage(SqlStorage):
         cursor.execute(f'CREATE VIEW "{viewname}" AS SELECT NULL as id WHERE 1<>1;')
 
     def _create_view(self, viewname, select, sco_type, deps=None, cursor=None):
-        """Overrides parent"""
+        """Creates or replaces a view, handling missing tables by creating them."""
         validate_name(viewname)
         if not cursor:
-            cursor = self._execute('BEGIN;')
+            cursor = self._execute("BEGIN;")
         is_new = True
         if not deps:
             deps = []
         elif viewname in deps:
             is_new = False
-            # Get the query that makes up the current view
             slct = self._get_view_def(viewname)
             if not self._is_sql_view(viewname, cursor):
-                # Must be a table...
-                self._execute(f'ALTER TABLE "{viewname}" RENAME TO "_{viewname}"', cursor)
-                slct = slct.replace(viewname, f'_{viewname}')
-            # Swap out the viewname for its definition
-            select = re.sub(f'FROM "{viewname}"', f'FROM ({slct}) AS tmp', select, count=1)
-            select = re.sub(f'"{viewname}"', 'tmp', select)
+                self._execute(
+                    f'ALTER TABLE "{viewname}" RENAME TO "_{viewname}"', cursor
+                )
+                slct = slct.replace(viewname, f"_{viewname}")
+            select = re.sub(
+                f'FROM "{viewname}"', f"FROM ({slct}) AS tmp", select, count=1
+            )
+            select = re.sub(f'"{viewname}"', "tmp", select)
         try:
             self._execute(f'CREATE OR REPLACE VIEW "{viewname}" AS {select}', cursor)
         except psycopg2.errors.UndefinedTable as e:
             # Missing dep?
             self.connection.rollback()
             logger.error(e, exc_info=e)
-            cursor = self._execute('BEGIN;')
+            cursor = self._execute("BEGIN;")
             self._create_empty_view(viewname, cursor)
         except psycopg2.errors.InvalidTableDefinition:
             # Usually "cannot drop columns from view"
-            #logger.error(e, exc_info=e)
+            # logger.error(e, exc_info=e)
             self.connection.rollback()
-            cursor = self._execute('BEGIN;')
+            cursor = self._execute("BEGIN;")
             self._execute(f'DROP VIEW IF EXISTS "{viewname}";', cursor)
             self._execute(f'CREATE VIEW "{viewname}" AS {select}', cursor)
             is_new = False
@@ -326,7 +347,7 @@ class PgStorage(SqlStorage):
             # We see this on SQL injection attempts
             raise UnexpectedError(e.args[0]) from e
         except psycopg2.errors.UndefinedColumn as e:
-            m = re.search(r'^column (.*) does not exist', e.args[0])
+            m = re.search(r"^column (.*) does not exist", e.args[0])
             raise InvalidAttr(m.group(1)) from e
         if is_new:
             self._new_name(cursor, viewname, sco_type)
@@ -336,73 +357,91 @@ class PgStorage(SqlStorage):
         self._execute(f'CREATE OR REPLACE VIEW "{viewname}" AS {viewdef}', cursor)
 
     def _get_view_def(self, viewname):
-        cursor = self._query("SELECT definition"
-                             " FROM pg_views"
-                             " WHERE schemaname = %s"
-                             " AND viewname = %s", (self.session_id, viewname))
+        cursor = self._query(
+            "SELECT definition"
+            " FROM pg_views"
+            " WHERE schemaname = %s"
+            " AND viewname = %s",
+            (self.session_id, viewname),
+        )
         viewdef = cursor.fetchone()
         return _rewrite_view_def(viewname, viewdef)
 
     def _is_sql_view(self, name, cursor=None):
-        cursor = self._query("SELECT definition"
-                             " FROM pg_views"
-                             " WHERE schemaname = %s"
-                             " AND viewname = %s", (self.session_id, name))
+        cursor = self._query(
+            "SELECT definition"
+            " FROM pg_views"
+            " WHERE schemaname = %s"
+            " AND viewname = %s",
+            (self.session_id, name),
+        )
         viewdef = cursor.fetchone()
         return viewdef is not None
 
     def tables(self):
-        cursor = self._query("SELECT table_name"
-                             " FROM information_schema.tables"
-                             " WHERE table_schema = %s"
-                             "   AND table_type != 'VIEW'", (self.session_id, ))
+        cursor = self._query(
+            "SELECT table_name"
+            " FROM information_schema.tables"
+            " WHERE table_schema = %s"
+            "   AND table_type != 'VIEW'",
+            (self.session_id,),
+        )
         rows = cursor.fetchall()
-        return [i['table_name'] for i in rows
-                if not i['table_name'].startswith('__')]
+        return [i["table_name"] for i in rows if not i["table_name"].startswith("__")]
 
     def types(self, private=False):
-        stmt = ("SELECT table_name FROM information_schema.tables"
-                " WHERE table_schema = %s AND table_type != 'VIEW'"
-                "  EXCEPT SELECT name as table_name FROM __symtable")
-        cursor = self._query(stmt, (self.session_id, ))
+        stmt = (
+            "SELECT table_name FROM information_schema.tables"
+            " WHERE table_schema = %s AND table_type != 'VIEW'"
+            "  EXCEPT SELECT name as table_name FROM __symtable"
+        )
+        cursor = self._query(stmt, (self.session_id,))
         rows = cursor.fetchall()
         if private:
-            return [i['table_name'] for i in rows]
+            return [i["table_name"] for i in rows]
         # Ignore names that start with 1 or 2 underscores
-        return [i['table_name'] for i in rows
-                if not i['table_name'].startswith('_')]
+        return [i["table_name"] for i in rows if not i["table_name"].startswith("_")]
 
     def columns(self, viewname):
         validate_name(viewname)
-        cursor = self._query("SELECT column_name"
-                             " FROM information_schema.columns"
-                             " WHERE table_schema = %s"
-                             " AND table_name = %s", (self.session_id, viewname))
+        cursor = self._query(
+            "SELECT column_name"
+            " FROM information_schema.columns"
+            " WHERE table_schema = %s"
+            " AND table_name = %s",
+            (self.session_id, viewname),
+        )
         rows = cursor.fetchall()
-        return [i['column_name'] for i in rows]
+        return [i["column_name"] for i in rows]
 
     def schema(self, viewname=None):
         if viewname:
             validate_name(viewname)
-            cursor = self._query("SELECT column_name AS name, data_type AS type"
-                                 " FROM information_schema.columns"
-                                 " WHERE table_schema = %s"
-                                 " AND table_name = %s", (self.session_id, viewname))
+            cursor = self._query(
+                "SELECT column_name AS name, data_type AS type"
+                " FROM information_schema.columns"
+                " WHERE table_schema = %s"
+                " AND table_name = %s",
+                (self.session_id, viewname),
+            )
         else:
-            cursor = self._query("SELECT table_name AS table, column_name AS name, data_type AS type"
-                                 " FROM information_schema.columns"
-                                 " WHERE table_schema = %s", (self.session_id,))
+            cursor = self._query(
+                "SELECT table_name AS table, column_name AS name, data_type AS type"
+                " FROM information_schema.columns"
+                " WHERE table_schema = %s",
+                (self.session_id,),
+            )
         return cursor.fetchall()
 
     def delete(self):
         """Delete ALL data in this store"""
-        cursor = self._execute('BEGIN;')
+        cursor = self._execute("BEGIN;")
         self._execute(f'DROP SCHEMA "{self.session_id}" CASCADE;', cursor)
         self.connection.commit()
         cursor.close()
 
     def upsert_many(self, cursor, tablename, objs, query_id, schema, **kwargs):
-        use_copy = kwargs.get('use_copy')
+        use_copy = kwargs.get("use_copy")
         if use_copy:
             self.upsert_copy(cursor, tablename, objs, query_id, schema)
         else:
@@ -411,48 +450,61 @@ class PgStorage(SqlStorage):
     def upsert_multirow(self, cursor, tablename, objs, query_id, schema):
         colnames = list(schema.keys())
         quoted_colnames = [f'"{x}"' for x in colnames]
-        valnames = ', '.join(quoted_colnames)
+        valnames = ", ".join(quoted_colnames)
 
-        placeholders = ', '.join([f"({', '.join([self.placeholder] * len(colnames))})"] * len(objs))
+        placeholders = ", ".join(
+            [f"({', '.join([self.placeholder] * len(colnames))})"] * len(objs)
+        )
         stmt = f'INSERT INTO "{tablename}" ({valnames}) VALUES {placeholders}'
         idx = None
-        if 'id' in colnames:
-            idx = colnames.index('id')
-            action = 'NOTHING'
-            if tablename != 'identity':
+        if "id" in colnames:
+            idx = colnames.index("id")
+            action = "NOTHING"
+            if tablename != "identity":
                 excluded = self._get_excluded(colnames, tablename)
                 if excluded:
-                    action = f'UPDATE SET {excluded}'
-            stmt += f' ON CONFLICT (id) DO {action}'
+                    action = f"UPDATE SET {excluded}"
+            stmt += f" ON CONFLICT (id) DO {action}"
         else:
-            stmt += ' ON CONFLICT DO NOTHING'
+            stmt += " ON CONFLICT DO NOTHING"
         values = []
         query_values = []
         for obj in objs:
             if query_id and idx is not None:
                 query_values.append(obj[idx])
                 query_values.append(query_id)
-            values.extend([ujson.dumps(value, ensure_ascii=False)
-                           if isinstance(value, (list, dict)) else value for value in obj])
+            values.extend(
+                [
+                    (
+                        ujson.dumps(value, ensure_ascii=False)
+                        if isinstance(value, (list, dict))
+                        else value
+                    )
+                    for value in obj
+                ]
+            )
         cursor.execute(stmt, values)
 
-        if query_id and 'id' in colnames:
+        if query_id and "id" in colnames:
             # Now add to query table as well
-            placeholders = ', '.join([f'({self.placeholder}, {self.placeholder})'] * len(objs))
-            stmt = (f'INSERT INTO "__queries" (sco_id, query_id)'
-                    f' VALUES {placeholders}')
+            placeholders = ", ".join(
+                [f"({self.placeholder}, {self.placeholder})"] * len(objs)
+            )
+            stmt = (
+                f'INSERT INTO "__queries" (sco_id, query_id)' f" VALUES {placeholders}"
+            )
             cursor.execute(stmt, query_values)
 
     def upsert_copy(self, cursor, tablename, objs, query_id, schema):
         colnames = list(schema.keys())
         quoted_colnames = [f'"{x}"' for x in colnames]
-        valnames = ', '.join(quoted_colnames)
+        valnames = ", ".join(quoted_colnames)
 
         # Create a temp table that copies the structure of `tablename`
-        #cursor.execute(f'CREATE TEMP TABLE tmp AS SELECT * FROM "{tablename}" WHERE 1=2;')
-        s = ', '.join([f'"{name}" {ctype}' for name, ctype in schema.items()])
-        stmt = f'CREATE TEMP TABLE tmp ({s})'
-        logger.debug('%s', stmt)
+        # cursor.execute(f'CREATE TEMP TABLE tmp AS SELECT * FROM "{tablename}" WHERE 1=2;')
+        s = ", ".join([f'"{name}" {ctype}' for name, ctype in schema.items()])
+        stmt = f"CREATE TEMP TABLE tmp ({s})"
+        logger.debug("%s", stmt)
         cursor.execute(stmt)
 
         # Create a generator over `objs` that returns text formatted objects
@@ -460,41 +512,47 @@ class PgStorage(SqlStorage):
         cursor.copy_expert(copy_stmt, ListToTextIO(objs, colnames, sep=SEP))
 
         # Now SELECT from TEMP table to real table
-        stmt = (f'INSERT INTO "{tablename}" ({valnames})'
-                f' SELECT {valnames} FROM tmp')
-        if 'id' in colnames:
-            stmt += ' ORDER BY id'  # Avoid deadlocks
-            action = 'NOTHING'
-            if tablename != 'identity':
+        stmt = f'INSERT INTO "{tablename}" ({valnames})' f" SELECT {valnames} FROM tmp"
+        if "id" in colnames:
+            stmt += " ORDER BY id"  # Avoid deadlocks
+            action = "NOTHING"
+            if tablename != "identity":
                 excluded = self._get_excluded(colnames, tablename)
                 if excluded:
-                    action = f'UPDATE SET {excluded}'
-            stmt += f'  ON CONFLICT (id) DO {action}'
+                    action = f"UPDATE SET {excluded}"
+            stmt += f"  ON CONFLICT (id) DO {action}"
         else:
-            stmt += ' ON CONFLICT DO NOTHING'
+            stmt += " ON CONFLICT DO NOTHING"
         cursor.execute(stmt)
 
         # Don't need the temp table anymore
-        cursor.execute('DROP TABLE tmp')
+        cursor.execute("DROP TABLE tmp")
 
-        if query_id and 'id' in colnames:
+        if query_id and "id" in colnames:
             # Now add to query table as well
-            idx = colnames.index('id')
-            copy_stmt = f"COPY __queries(sco_id, query_id) FROM STDIN WITH DELIMITER '{SEP}'"
+            idx = colnames.index("id")
+            copy_stmt = (
+                f"COPY __queries(sco_id, query_id) FROM STDIN WITH DELIMITER '{SEP}'"
+            )
             qobjs = [(obj[idx], query_id) for obj in objs]
-            cursor.copy_expert(copy_stmt, TuplesToTextIO(qobjs, ['sco_id', 'query_id'], sep=SEP))
+            cursor.copy_expert(
+                copy_stmt, TuplesToTextIO(qobjs, ["sco_id", "query_id"], sep=SEP)
+            )
 
     def finish(self, index=True):
         if index:
-            cursor = self._query("SELECT table_name"
-                                 " FROM information_schema.tables"
-                                 " WHERE table_schema = %s"
-                                 "   AND table_name IN (%s, %s)", (self.session_id, '__contains', '__reflist'))
+            cursor = self._query(
+                "SELECT table_name"
+                " FROM information_schema.tables"
+                " WHERE table_schema = %s"
+                "   AND table_name IN (%s, %s)",
+                (self.session_id, "__contains", "__reflist"),
+            )
             rows = cursor.fetchall()
-            tables = [i['table_name'] for i in rows]
-            cursor = self._execute('BEGIN;')
-            if 'relationship' in self.tables():
-                tables.append('relationship')
+            tables = [i["table_name"] for i in rows]
+            cursor = self._execute("BEGIN;")
+            if "relationship" in self.tables():
+                tables.append("relationship")
             for tablename in tables:
                 self._create_index(tablename, cursor)
             self.connection.commit()
