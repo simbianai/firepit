@@ -329,12 +329,55 @@ class SqlStorage:
         return stmt
 
     def _create_index(self, tablename, cursor):
-        if tablename in ["__contains", "__reflist", "relationship"]:
-            for col in ["source_ref", "target_ref"]:
-                self._execute(
-                    f'CREATE INDEX IF NOT EXISTS "{tablename}_{col}_idx" ON "{tablename}" ("{col}");',
-                    cursor,
-                )
+        """
+        Create database indexes for performance optimization.
+        Includes error handling and logging.
+        """
+        try:
+            # Original indexes for relationship tables
+            if tablename in ["__contains", "__reflist", "relationship"]:
+                for col in ["source_ref", "target_ref"]:
+                    try:
+                        self._execute(
+                            f'CREATE INDEX IF NOT EXISTS "{tablename}_{col}_idx" ON "{tablename}" ("{col}");',
+                            cursor,
+                        )
+                    except Exception as e:
+                        logging.exception(
+                            f"Error creating index for {tablename}.{col}: {str(e)}"
+                        )
+
+            # Additional indexes for observed-data
+            if tablename == "observed-data":
+                index_definitions = [
+                    # Single column indexes
+                    ("first_observed", False),
+                    ("last_observed", False),
+                    # Composite indexes for common query patterns
+                    (
+                        "(first_observed, last_observed)",
+                        True,
+                    ),  # Composite index for range queries
+                    ("(id, first_observed)", True),  # For lookups with ID
+                ]
+
+                for index_cols, is_expression in index_definitions:
+                    try:
+                        index_name = f"{tablename}_{'_'.join(index_cols.replace('(','').replace(')','').split(', '))}_idx"
+                        if is_expression:
+                            query = f'CREATE INDEX IF NOT EXISTS "{index_name}" ON "{tablename}" {index_cols};'
+                        else:
+                            query = f'CREATE INDEX IF NOT EXISTS "{index_name}" ON "{tablename}" ("{index_cols}");'
+
+                        self._execute(query, cursor)
+                        logging.info(f"Successfully created index: {index_name}")
+                    except Exception as e:
+                        logging.exception(
+                            f"Error creating index {index_name}: {str(e)}"
+                        )
+
+        except Exception as e:
+            logging.error(f"Error in _create_index for table {tablename}: {str(e)}")
 
     def _create_table(self, tablename, columns):
         stmt = f'CREATE TABLE "{tablename}" ('

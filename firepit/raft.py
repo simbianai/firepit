@@ -333,18 +333,26 @@ def flatten(obs):
 
     return results
 
-
 def _mark_tree(objs, k, reffed):
-    if k in reffed:
-        return  # Base condition: Node already processed
-    reffed.add(k)
-    for attr, val in objs[k].items():
-        if attr.endswith("_ref"):
-            if val not in objs or val == k:
-                continue
-            _mark_tree(objs, val, reffed)
-        elif attr.endswith("_refs"):
-            for ref in val:
-                if ref not in objs or ref == k:
+    stack = [k]
+    
+    while stack:
+        current = stack.pop()
+        if current in reffed:
+            continue  # Already processed this node
+            
+        reffed.add(current)
+        
+        if current not in objs:
+            continue
+            
+        for attr, val in objs[current].items():
+            if attr.endswith("_ref"):
+                if val not in objs or val == current:
                     continue
-                _mark_tree(objs, ref, reffed)
+                stack.append(val)
+            elif attr.endswith("_refs"):
+                for ref in val:
+                    if ref not in objs or ref == current:
+                        continue
+                    stack.append(ref)

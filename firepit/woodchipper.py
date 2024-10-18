@@ -24,32 +24,29 @@ from firepit.timestamp import timefmt
 
 INTEGER_PROPS = {
     # autonomous-system
-    'number',
-
+    "number",
     # file (and others)
-    'size',
-
+    "size",
     # network-traffic
-    'src_port',
-    'dst_port',
-    'src_byte_count',
-    'dst_byte_count',
-    'src_packets',
-    'dst_packets',
-
+    "src_port",
+    "dst_port",
+    "src_byte_count",
+    "dst_byte_count",
+    "src_packets",
+    "dst_packets",
     # process
-    'pid',
+    "pid",
 }
 
 
 REG_HIVE_MAP = {
-    'HKLM': 'HKEY_LOCAL_MACHINE',
-    'HKCU': 'HKEY_CURRENT_USER',
-    'HKCR': 'HKEY_CLASSES_ROOT',
-    'HKCC': 'HKEY_CURRENT_CONFIG',
-    'HKPD': 'HKEY_PERFORMANCE_DATA',
-    'HKU':  'HKEY_USERS',
-    'HKDD': 'HKEY_DYN_DATA',
+    "HKLM": "HKEY_LOCAL_MACHINE",
+    "HKCU": "HKEY_CURRENT_USER",
+    "HKCR": "HKEY_CLASSES_ROOT",
+    "HKCC": "HKEY_CURRENT_CONFIG",
+    "HKPD": "HKEY_PERFORMANCE_DATA",
+    "HKU": "HKEY_USERS",
+    "HKDD": "HKEY_DYN_DATA",
 }
 
 
@@ -57,20 +54,20 @@ def guess_ref_type(sco_type, prop, val):
     """Get data type for `sco_type`:`prop` reference"""
     rtypes = ref_type(sco_type, prop)  # FIXME: need to parse_prop first
     rtype = rtypes[0] if len(rtypes) > 0 else None  # FIXME
-    if rtype == 'ipv4-addr' and ':' in val:
-        rtype = 'ipv6-addr'
+    if rtype == "ipv4-addr" and ":" in val:
+        rtype = "ipv6-addr"
     if rtype is None:
         # just guess based on value
-        if re.match(r'([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}', val):
-            rtype = 'mac-addr'
-        elif re.match(r'([0-9]{1,3}\.){3}[0-9]{1,3}', val):
-            rtype = 'ipv4-addr'
+        if re.match(r"([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}", val):
+            rtype = "mac-addr"
+        elif re.match(r"([0-9]{1,3}\.){3}[0-9]{1,3}", val):
+            rtype = "ipv4-addr"
     return rtype
 
 
 def recreate_dict(obj, prop, rest, val):
     thing = obj.get(prop, {})
-    first, _, rest = rest.partition('.')
+    first, _, rest = rest.partition(".")
     if not rest:
         thing[first.strip("'")] = val
     else:
@@ -87,32 +84,32 @@ def format_val(sco_type, prop, val):
             result = int(val)
         except ValueError:
             result = int(val, 16)
-    elif prop == 'protocols':  # HACKY
+    elif prop == "protocols":  # HACKY
         result = [val] if not isinstance(val, list) else val
-    elif prop == 'key':
+    elif prop == "key":
         result = val
         for abbrev, full in REG_HIVE_MAP.items():
             if val.startswith(abbrev):
                 result = val.replace(abbrev, full, 1)
-    elif sco_type == 'ipv4-addr' and prop == 'value':
+    elif sco_type == "ipv4-addr" and prop == "value":
         # DNS QueryResults have ; at the end of addr?
-        result = val.strip(';')  # TODO: need to check for multiple addrs?
+        result = val.strip(";")  # TODO: need to check for multiple addrs?
     else:
         result = val
     return result
 
 
 def set_obs_prop(observable, path, val, scos, key):
-    prop, _, rest = path.partition('.')
-    if prop.endswith(']'):  #FIXME: not always a ref!
-        ref_name, _, idx = prop.rstrip(']').partition('[')
-        ref_type = guess_ref_type(observable['type'], ref_name, val)
+    prop, _, rest = path.partition(".")
+    if prop.endswith("]"):  # FIXME: not always a ref!
+        ref_name, _, idx = prop.rstrip("]").partition("[")
+        ref_type = guess_ref_type(observable["type"], ref_name, val)
         if not ref_type:
-            pass #TODO
+            pass  # TODO
         ref_key = key + prop
-        other = scos.get(ref_key, {'type': ref_type})
-        if '.' in rest:
-            set_obs_prop(other, rest, val, scos, ref_key + '.')
+        other = scos.get(ref_key, {"type": ref_type})
+        if "." in rest:
+            set_obs_prop(other, rest, val, scos, ref_key + ".")
         else:
             other[rest] = format_val(ref_type, rest, val)
         scos[ref_key] = other
@@ -124,28 +121,28 @@ def set_obs_prop(observable, path, val, scos, key):
             refs = [None for i in range(int(idx) + 1)]
             refs[int(idx)] = ref_key
             observable[ref_name] = refs
-    elif prop.endswith('_ref') or prop.endswith('_refs'):
-        ref_type = guess_ref_type(observable['type'], prop, val)
+    elif prop.endswith("_ref") or prop.endswith("_refs"):
+        ref_type = guess_ref_type(observable["type"], prop, val)
         ref_key = key + prop
-        other = scos.get(ref_key, {'type': ref_type})
-        if '.' in rest:
-            set_obs_prop(other, rest, val, scos, ref_key + '.')
+        other = scos.get(ref_key, {"type": ref_type})
+        if "." in rest:
+            set_obs_prop(other, rest, val, scos, ref_key + ".")
         else:
             other[rest] = format_val(ref_type, rest, val)
         scos[ref_key] = other
         observable[prop] = ref_key
     elif not rest:
-        observable[prop] = format_val(observable['type'], prop, val)
-    elif '_refs[*].' in rest:
+        observable[prop] = format_val(observable["type"], prop, val)
+    elif "_refs[*]." in rest:
         # TODO
         # Trying to deal with e.g. extensions.'dns-ext'.resolved_ip_refs[*].value
         pass
-    elif '_ref.' in rest:
+    elif "_ref." in rest:
         # I don't think this is working yet
         # Trying to deal with e.g. extensions.'dns-ext'.question.name_ref.value
         thing = observable.get(prop, {})
-        if key.endswith(':') or key.endswith('.'):
-            ref_key = key + prop + '.'
+        if key.endswith(":") or key.endswith("."):
+            ref_key = key + prop + "."
         else:
             ref_key = key + prop
         set_obs_prop(thing, rest, val, scos, ref_key)
@@ -157,10 +154,10 @@ def set_obs_prop(observable, path, val, scos, key):
 def fixup_hashes(hashes: dict):
     result = []
     for key, val in hashes.items():
-        key = key.replace('SHA', 'SHA-')
-        if '-' in key:
+        key = key.replace("SHA", "SHA-")
+        if "-" in key:
             key = f"'{key}'"
-        result.append(('process:binary_ref.hashes.' + key, val))
+        result.append(("process:binary_ref.hashes." + key, val))
     return result
 
 
@@ -169,13 +166,13 @@ def _translate_refs(obj, mapping):
     for prop, val in obj.items():
         if isinstance(val, dict):
             combos.update(_translate_refs(val, mapping))
-        if prop.endswith('_ref') or prop.endswith('_refs'):
+        if prop.endswith("_ref") or prop.endswith("_refs"):
             if isinstance(val, list):
                 obj[prop] = [mapping[v] for v in val]
             else:
                 obj[prop] = mapping[val]
-        elif prop.endswith(']'):
-            stub, _, _ = prop.partition('[')
+        elif prop.endswith("]"):
+            stub, _, _ = prop.partition("[")
             if stub not in combos:
                 combos[stub] = []
             combos[stub].append(mapping[val])
@@ -186,12 +183,12 @@ def dict2observation(creator, row):
     now = timefmt(datetime.datetime.utcnow())
     od = OrderedDict(
         {
-            'type': 'observed-data',
-            'id': 'observed-data--' + str(uuid.uuid4()),
-            'created_by_ref': creator['id'],
-            'created': now,
-            'modified': now,
-            'number_observed': 1,
+            "type": "observed-data",
+            "id": "observed-data--" + str(uuid.uuid4()),
+            "created_by_ref": creator["id"],
+            "created": now,
+            "modified": now,
+            "number_observed": 1,
         }
     )
 
@@ -199,86 +196,86 @@ def dict2observation(creator, row):
     for key, val in row.items():
         if not val:
             continue
-        if '#' in key:
-            key, _, sco_name = key.partition('#')
+        if "#" in key:
+            key, _, sco_name = key.partition("#")
         else:
             sco_name = None
-        if ':' not in key:  # Not STIX object path -> property of observed-data
-            if '.' not in key:
+        if ":" not in key:  # Not STIX object path -> property of observed-data
+            if "." not in key:
                 if key in KNOWN_TIMESTAMPS:
                     ts = dateutil.parser.parse(val)
                     od[key] = timefmt(ts)
                 else:
                     od[key] = val
             else:
-                prop, _, rest = key.partition('.')
+                prop, _, rest = key.partition(".")
                 recreate_dict(od, prop, rest, val)
         else:
-            sco_type, _, rest = key.partition(':')
+            sco_type, _, rest = key.partition(":")
             sco_key = sco_name or sco_type
-            observable = scos.get(sco_key, {'type': sco_type})
-            if rest.endswith('_ref') and ':' in val:
+            observable = scos.get(sco_key, {"type": sco_type})
+            if rest.endswith("_ref") and ":" in val:
                 # Special case for referencing another value
                 observable[rest] = val
             else:
-                set_obs_prop(observable, rest, val, scos, sco_type + ':')
+                set_obs_prop(observable, rest, val, scos, sco_type + ":")
             scos[sco_key] = observable
-    od['objects'] = {}
+    od["objects"] = {}
 
     # Create a mapping from ref_key to index num
     mapping = {}
     for key, obj in scos.items():
-        idx = len(od['objects'])
-        od['objects'][str(idx)] = obj
+        idx = len(od["objects"])
+        od["objects"][str(idx)] = obj
         mapping[key] = str(idx)
 
     # Translate references
     repls = {}
-    for key, obj in od['objects'].items():
+    for key, obj in od["objects"].items():
         combos = _translate_refs(obj, mapping)
 
         # Combine references
         for k, v in combos.items():
             obj[k] = v
-        new_obj = {k: v for k, v in obj.items() if not k.endswith(']')}
+        new_obj = {k: v for k, v in obj.items() if not k.endswith("]")}
         repls[key] = new_obj
     for orig, repl in repls.items():
-        od['objects'][orig] = repl
+        od["objects"][orig] = repl
 
     # Walk objects and fix up x-oca-event if present
     refs = {}
-    for idx, sco in od['objects'].items():
-        sco_type = sco['type']
-        if sco_type == 'network-traffic':
+    for idx, sco in od["objects"].items():
+        sco_type = sco["type"]
+        if sco_type == "network-traffic":
             refs[sco_type] = idx
-        elif sco_type == 'process':  #'opened_connection_refs' in sco:
-            if 'process' not in refs:
+        elif sco_type == "process":  #'opened_connection_refs' in sco:
+            if "process" not in refs:
                 refs[sco_type] = idx
-            if 'parent_ref' in sco:
+            if "parent_ref" in sco:
                 refs[sco_type] = idx
-                refs['parent_process'] = sco['parent_ref']
-        elif sco_type == 'domain-name':
+                refs["parent_process"] = sco["parent_ref"]
+        elif sco_type == "domain-name":
             refs[sco_type] = idx
-        elif sco_type == 'file':
+        elif sco_type == "file":
             refs[sco_type] = idx
-        elif sco_type == 'x-oca-event':
+        elif sco_type == "x-oca-event":
             refs[sco_type] = idx
-        elif sco_type == 'x-oca-asset':
+        elif sco_type == "x-oca-asset":
             refs[sco_type] = idx
 
-    if 'x-oca-event' in refs:
-        event = od['objects'][refs['x-oca-event']]
+    if "x-oca-event" in refs:
+        event = od["objects"][refs["x-oca-event"]]
         for sco_type, idx in refs.items():
-            if sco_type == 'network-traffic':
-                event['network_ref'] = idx
-            elif sco_type in ['process', 'parent_process']:
-                event[sco_type + '_ref'] = idx
-            elif sco_type == 'file' and is_file_event(event['code']):
-                event[sco_type + '_ref'] = idx
-            elif sco_type == 'domain-name':
-                event['domain_ref'] = idx
-            elif sco_type == 'x-oca-asset':
-                event['host_ref'] = idx
+            if sco_type == "network-traffic":
+                event["network_ref"] = idx
+            elif sco_type in ["process", "parent_process"]:
+                event[sco_type + "_ref"] = idx
+            elif sco_type == "file" and is_file_event(event["code"]):
+                event[sco_type + "_ref"] = idx
+            elif sco_type == "domain-name":
+                event["domain_ref"] = idx
+            elif sco_type == "x-oca-asset":
+                event["host_ref"] = idx
 
     return od
 
@@ -288,141 +285,135 @@ def dict2observation(creator, row):
 
 ## Code for creating intermediate format
 
+
 def from_unix_time(ts):
     if isinstance(ts, str):
         ts = float(ts)
-    ts = datetime.datetime.fromtimestamp(ts).isoformat().replace('+00:00', 'Z')
-    return [('first_observed', ts),
-            ('last_observed', ts)]
+    ts = datetime.datetime.fromtimestamp(ts).isoformat().replace("+00:00", "Z")
+    return [("first_observed", ts), ("last_observed", ts)]
 
 
 def to_action_code(event_id):
-    '''Convert windows event ID to x-oca-event action and code'''
+    """Convert windows event ID to x-oca-event action and code"""
     event_id = int(event_id)
     return [
-        ('x-oca-event:code', event_id),
-        ('x-oca-event:action', windows_events.get(event_id)),
+        ("x-oca-event:code", event_id),
+        ("x-oca-event:action", windows_events.get(event_id)),
     ]
 
 
 def to_cat_list(category):
     value = category if isinstance(category, list) else [category]
-    return [('x-oca-event:category', value)]
+    return [("x-oca-event:category", value)]
 
 
 def to_payload_bin(value):
-    return [
-        ('artifact:payload_bin', base64.b64encode(value.encode()).decode('ascii'))
-    ]
+    return [("artifact:payload_bin", base64.b64encode(value.encode()).decode("ascii"))]
 
 
-PROTO_TABLE = {num:name[8:] for name, num in vars(socket).items() if name.startswith("IPPROTO")}
+PROTO_TABLE = {
+    num: name[8:] for name, num in vars(socket).items() if name.startswith("IPPROTO")
+}
+
+
 def to_protocol(value):
     if value.isdigit():
         try:
             value = PROTO_TABLE[int(value)].lower()
         except KeyError:
             pass
-    return [
-        ("process:opened_connection_refs[0].protocols", value)
-    ]
+    return [("process:opened_connection_refs[0].protocols", value)]
 
 
 def is_file_event(event_id):
     return event_id in {6, 7, 9, 11, 15}
 
 
-def split_hash(hash_string: str, prefix: str, tag: str = ''):
+def split_hash(hash_string: str, prefix: str, tag: str = ""):
     token_dict = {
         "SHA1=": f"{prefix}hashes.'SHA-1'{tag}",
         "MD5=": f"{prefix}hashes.MD5{tag}",
-        "SHA256=": f"{prefix}hashes.'SHA-256'{tag}"
+        "SHA256=": f"{prefix}hashes.'SHA-256'{tag}",
     }
     hashes = []
-    for hstr in hash_string.split(','):
+    for hstr in hash_string.split(","):
         for hash_token, _stix_key in token_dict.items():
             if hash_token in hstr:
-                hashes += [(token_dict[hash_token], hstr[len(hash_token):])]
+                hashes += [(token_dict[hash_token], hstr[len(hash_token) :])]
     return hashes
 
 
 def split_image_hash(hash_string: str):
-    return split_hash(hash_string, 'process:binary_ref.')
+    return split_hash(hash_string, "process:binary_ref.")
 
 
 def split_file_hash(hash_string: str):
-    return split_hash(hash_string, 'file:')
+    return split_hash(hash_string, "file:")
 
 
 def split_loaded_hash(hash_string: str):
-    return split_hash(hash_string, 'file:', '#loaded')
+    return split_hash(hash_string, "file:", "#loaded")
 
 
-def split_image(abs_name: str, prefix='process:'):
+def split_image(abs_name: str, prefix="process:"):
     name = ntpath.basename(abs_name)
     path = ntpath.dirname(abs_name)
     return [
-        (prefix + 'name', name),
-        (prefix + 'binary_ref.name', name),
-        (prefix + 'binary_ref.parent_directory_ref.path', path)
+        (prefix + "name", name),
+        (prefix + "binary_ref.name", name),
+        (prefix + "binary_ref.parent_directory_ref.path", path),
     ]
 
 
 def split_parent_image(abs_name: str):
-    return split_image(abs_name, prefix='process:parent_ref.')
+    return split_image(abs_name, prefix="process:parent_ref.")
 
 
 def split_image_loaded(abs_name: str):
     name = ntpath.basename(abs_name)
     path = ntpath.dirname(abs_name)
-    return [
-        ('file:name#loaded', name),
-        ('file:parent_directory_ref.path#loaded', path)
-    ]
+    return [("file:name#loaded", name), ("file:parent_directory_ref.path#loaded", path)]
 
 
-def split_file_path(abs_name: str, prefix='file:'):
+def split_file_path(abs_name: str, prefix="file:"):
     name = ntpath.basename(abs_name)
     path = ntpath.dirname(abs_name)
-    return [
-        (prefix + 'name', name),
-        (prefix + 'parent_directory_ref.path', path)
-    ]
+    return [(prefix + "name", name), (prefix + "parent_directory_ref.path", path)]
 
 
 def split_reg_key_value(path: str):
-    key, _, value = path.rpartition('\\')
+    key, _, value = path.rpartition("\\")
     return [
-        ('windows-registry-key:key', key),
-        ('windows-registry-key:values', [{'name': value}]),
+        ("windows-registry-key:key", key),
+        ("windows-registry-key:values", [{"name": value}]),
     ]
 
 
 # Do we need this?  Or can we extract it from the Message field?
 windows_events = {
-    1: 'Process Creation',
-    2: 'Process Changed a file creation time',
-    3: 'Network Connection',
-    4: 'Sysmon Service State Change',
-    5: 'Process Terminated',
-    6: 'Driver Loaded',
-    7: 'Image Loaded',
-    8: 'Create Remote Thread',
-    9: 'Raw File Access Read',
-    10: 'Process Access',
-    11: 'File Create',
-    12: 'Registry Create and Delete',
-    13: 'Registry Value Set',
-    14: 'Registry Key and Value Rename',
-    15: 'File Create Stream Hash',
-    16: 'Sysmon Config Change',
-    17: 'Pipe Event Created',
-    18: 'Pipe Event Connected',
-    19: 'WMI EventFilter activity',
-    20: 'WMI EventConsumer activity',
-    21: 'WMI EventConsumerToFilter activity',
-    22: 'DNS Query',
-    255: 'Sysmon error',
+    1: "Process Creation",
+    2: "Process Changed a file creation time",
+    3: "Network Connection",
+    4: "Sysmon Service State Change",
+    5: "Process Terminated",
+    6: "Driver Loaded",
+    7: "Image Loaded",
+    8: "Create Remote Thread",
+    9: "Raw File Access Read",
+    10: "Process Access",
+    11: "File Create",
+    12: "Registry Create and Delete",
+    13: "Registry Value Set",
+    14: "Registry Key and Value Rename",
+    15: "File Create Stream Hash",
+    16: "Sysmon Config Change",
+    17: "Pipe Event Created",
+    18: "Pipe Event Connected",
+    19: "WMI EventFilter activity",
+    20: "WMI EventConsumer activity",
+    21: "WMI EventConsumerToFilter activity",
+    22: "DNS Query",
+    255: "Sysmon error",
 }
 
 
@@ -440,8 +431,8 @@ windows_mapping = {
         "ParentProcessId": "process:parent_ref.pid",
         "ParentProcessGuid": "process:parent_ref.x_unique_id",
         "ParentCommandLine": "process:parent_ref.command_line",
-        #"UserID": "process:creator_user_ref.user_id",
-        #"User": "process:creator_user_ref.account_login",
+        # "UserID": "process:creator_user_ref.user_id",
+        # "User": "process:creator_user_ref.account_login",
         "User": "process:creator_user_ref.user_id",
         "Hashes": split_image_hash,
     },
@@ -494,7 +485,7 @@ windows_mapping = {
     },
     3018: {
         "QueryName": "domain-name:value",
-        #"QueryType": "domain-name:resolves_to_refs[0].type",
+        # "QueryType": "domain-name:resolves_to_refs[0].type",
         "QueryResults": "domain-name:resolves_to_refs[0].value",
     },
     4688: {
@@ -505,7 +496,7 @@ windows_mapping = {
         "ParentProcessGuid": "process:parent_ref.x_unique_id",
         "ProcessId": "process:parent_ref.pid",
         "ProcessGuid": "process:x_unique_id",
-        #"SubjectUserName": "process:creator_user_ref.account_login",
+        # "SubjectUserName": "process:creator_user_ref.account_login",
         "SubjectUserName": "process:creator_user_ref.user_id",
     },
     5156: {
@@ -522,9 +513,12 @@ windows_mapping = {
 
 
 def merge_mappings(common, specific, key=None):
-    '''Merge common mapping into specific[key] mapping'''
+    """Merge common mapping into specific[key] mapping"""
     if key:
-        return {k: {j: {**u, **common} if j == key else u for j, u in v.items()} for k, v in specific.items()}
+        return {
+            k: {j: {**u, **common} if j == key else u for j, u in v.items()}
+            for k, v in specific.items()
+        }
     return {**common, **specific}
 
 
@@ -561,12 +555,14 @@ def process_event(event, mapping, event_id=None):
 
 ## End of code for creating intermediate format
 
+
 class Mapper:
     def detect(self, event):
         raise NotImplementedError
 
     def convert(self, event):
         raise NotImplementedError
+
 
 ## Datasource specific code
 
@@ -577,21 +573,31 @@ class SdsMapper(Mapper):
     @staticmethod
     def enhanced_action(message):
         results = to_payload_bin(message)
-        m = re.search(r'^([^:\.]*)', message)
+        m = re.search(r"^([^:\.]*)", message)
         if m:
-            results.append(('x-oca-event:action', m.group(1)))
-        m = re.search(r'EventType: (\w+)', message)
+            results.append(("x-oca-event:action", m.group(1)))
+        m = re.search(r"EventType: (\w+)", message)
         if m:
             event_type = m.group(1)
             event_id = SdsMapper.event_types.get(event_type)
             if event_id:
-                results.append(('x-oca-event:action', windows_events.get(event_id) + ' - ' + event_type))
+                results.append(
+                    (
+                        "x-oca-event:action",
+                        windows_events.get(event_id) + " - " + event_type,
+                    )
+                )
         m = re.search(r'Details: ([^"]*)', message)
         if m:
             details = m.group(1)
-            if details.startswith('DWORD') or details.startswith('QWORD'):
+            if details.startswith("DWORD") or details.startswith("QWORD"):
                 parts = details.split()
-                results.append(('windows-registry-key:values', [{'data': parts[1], 'data_type': parts[0]}]))
+                results.append(
+                    (
+                        "windows-registry-key:values",
+                        [{"data": parts[1], "data_type": parts[0]}],
+                    )
+                )
         return results
 
     # TODO: Are these common to all Windows event sources?
@@ -604,7 +610,7 @@ class SdsMapper(Mapper):
         "EventID": to_action_code,
         "Category": to_cat_list,  # "x-oca-event:category" is defined to be a list
         "Message": lambda x: SdsMapper.enhanced_action(x),
-        #"Message": to_payload_bin,
+        # "Message": to_payload_bin,
         "ProcessName": split_image,  # At least some events use this instead of Image
         "ProcessId": "process:pid",
         "ProcessGuid": "process:x_unique_id",
@@ -613,36 +619,38 @@ class SdsMapper(Mapper):
 
     # Mapping of EventType message field to event ID
     event_types = {
-        'SetValue': 13,
-        'DeleteValue': 12,
-        'CreateKey': 12,
-        'DeleteKey': 12,
-        'CreatePipe': 17,
-        'ConnectPipe': 18,
+        "SetValue": 13,
+        "DeleteValue": 12,
+        "CreateKey": 12,
+        "DeleteKey": 12,
+        "CreatePipe": 17,
+        "ConnectPipe": 18,
     }
 
     def detect(self, event):
-        tags = event.get('tags')
-        return ((tags is not None and 'mordorDataset' in tags) or
-                ('EventID' in event and 'TimeCreated' in event))  # FIXME: too generic?
+        tags = event.get("tags")
+        return (tags is not None and "mordorDataset" in tags) or (
+            "EventID" in event and "TimeCreated" in event
+        )  # FIXME: too generic?
 
     def convert(self, event):
-        event_id = event['EventID']
+        event_id = event["EventID"]
         result = process_event(event, self.common_mapping, event_id)
-        #if 'user-account:account_login' not in result:
-        if 'user-account:user_id' not in result:
-            username = event.get('TargetUserName')
+        # if 'user-account:account_login' not in result:
+        if "user-account:user_id" not in result:
+            username = event.get("TargetUserName")
             if not username:
-                username = event.get('SubjectUserName')
-            if username and username != '-':
-                #result['user-account:account_login'] = username
-                result['user-account:user_id'] = username
+                username = event.get("SubjectUserName")
+            if username and username != "-":
+                # result['user-account:account_login'] = username
+                result["user-account:user_id"] = username
         return result
 
 
 # Zeek logs
 # The problem here is that zeek logs span multiple files; this only covers conn OR dns.
 # TODO: figure out how to merge the different Zeek logs first, then process.
+
 
 class ZeekCsvMapper(Mapper):
     zeek_mapping = {  # FIXME: this is only conn log
@@ -659,7 +667,7 @@ class ZeekCsvMapper(Mapper):
     }
 
     def detect(self, event):
-        return 'id.orig_h' in event
+        return "id.orig_h" in event
 
     def convert(self, event):
         return dict(process_event(event, self.zeek_mapping))
@@ -667,7 +675,7 @@ class ZeekCsvMapper(Mapper):
 
 class ZeekJsonMapper(Mapper):
     common_mapping = {
-        #"@system": "x-oca-asset:hostname",
+        # "@system": "x-oca-asset:hostname",
         "ts": from_unix_time,
         "id_orig_h": "network-traffic:src_ref.value",
         "id_orig_p": "network-traffic:src_port",
@@ -677,7 +685,7 @@ class ZeekJsonMapper(Mapper):
     }
 
     zeek_mapping = {
-        'conn': {
+        "conn": {
             "orig_ip_bytes": "network-traffic:src_byte_count",
             "resp_ip_bytes": "network-traffic:dst_byte_count",
             "orig_pkts": "network-traffic:src_packets",
@@ -685,11 +693,11 @@ class ZeekJsonMapper(Mapper):
             "orig_l2_addr": "network-traffic:src_ref.resolves_to_refs[0].value",
             "resp_l2_addr": "network-traffic:dst_ref.resolves_to_refs[0].value",
         },
-        'dns': {
+        "dns": {
             #'query': "network-traffic:extensions.'dns-ext'.question.name_ref.value",
-            'query': 'domain-name:value',
-            'answers': lambda x: ZeekJsonMapper.process_answers(x),
-        }
+            "query": "domain-name:value",
+            "answers": lambda x: ZeekJsonMapper.process_answers(x),
+        },
     }
 
     @staticmethod
@@ -699,7 +707,7 @@ class ZeekJsonMapper(Mapper):
         for answer in answers:
             try:
                 _ = ip_address(answer)
-                #results.append(("network-traffic:extensions.'dns-ext'.resolved_ip_refs[*].value", answer))
+                # results.append(("network-traffic:extensions.'dns-ext'.resolved_ip_refs[*].value", answer))
                 results.append((f"domain-name:resolves_to_refs[{i}].value", answer))
                 i += 1
             except ValueError:
@@ -707,10 +715,10 @@ class ZeekJsonMapper(Mapper):
         return results
 
     def detect(self, event):
-        return '@stream' in event
+        return "@stream" in event
 
     def convert(self, event):
-        stream = event['@stream']
+        stream = event["@stream"]
         if stream in self.zeek_mapping:
             mapping = merge_mappings(self.common_mapping, self.zeek_mapping[stream])
         else:
@@ -719,6 +727,7 @@ class ZeekJsonMapper(Mapper):
 
 
 # ISC Honeypot: e.g. https://isc.sans.edu/api/#webhoneypotreportsbyurl
+
 
 class IscHoneypotJsonMapper(Mapper):
     mapping = {
@@ -733,44 +742,45 @@ class IscHoneypotJsonMapper(Mapper):
     }
 
     def detect(self, event):
-        return 'url' in event and 'user_agent' in event and 'source' in event
+        return "url" in event and "user_agent" in event and "source" in event
 
     def convert(self, event):
         # ISC Honeypot doesn't have ports or dest addr, so make them up
-        event['sport'] = 0
-        event['dport'] = 80
-        event['dest'] = '127.0.0.1'
-        event['proto'] = 'tcp'
-        event['ts'] = event['date'] + 'T' + event['time'] + '.000Z'
+        event["sport"] = 0
+        event["dport"] = 80
+        event["dest"] = "127.0.0.1"
+        event["proto"] = "tcp"
+        event["ts"] = event["date"] + "T" + event["time"] + ".000Z"
         return dict(process_event(event, self.mapping))
 
 
 # Generic "flat" JSON mapper
 
+
 class FlatJsonMapper(Mapper):
     def detect(self, event):
-        otype = event.get('type')
+        otype = event.get("type")
         if otype:
             return primary_prop(otype) in event
         return False
 
     def convert(self, event):
         result = {}
-        otype = event.get('type')
+        otype = event.get("type")
         timestamp_key = None
         if otype:
             for key, value in event.items():
-                if key in ['first_observed', 'last_observed', 'number_observed']:
+                if key in ["first_observed", "last_observed", "number_observed"]:
                     new_key = key
                 else:
-                    new_key = f'{otype}:{key}'
+                    new_key = f"{otype}:{key}"
                     if key in KNOWN_TIMESTAMPS:
                         timestamp_key = key
                 result[new_key] = value
-            if timestamp_key and 'first_observed' not in result:
+            if timestamp_key and "first_observed" not in result:
                 ts = event[timestamp_key]
-                result['first_observed'] = ts
-                result['last_observed'] = ts
+                result["first_observed"] = ts
+                result["last_observed"] = ts
             return result
         return None
 
@@ -779,6 +789,7 @@ class FlatJsonMapper(Mapper):
 
 
 # File format code
+
 
 def process_events(events, mappers, ident):
     mapper = None
@@ -803,20 +814,20 @@ def read_csv(fp, mappers, ident):
     # Currently this knows about Bro/Zeek CSV format
     # Ideally this would be agnostic to the CSV producer
     quoting = csv.QUOTE_NONE
-    sep = '\t'
+    sep = "\t"
     linenum = 0
     for line in fp:
-        line = line.rstrip('\n')
-        if line.startswith('#separator'):
-            _, _, sep = line.partition(' ').decode('unicode_escape')
-        elif line.startswith('#fields'):
+        line = line.rstrip("\n")
+        if line.startswith("#separator"):
+            _, _, sep = line.partition(" ").decode("unicode_escape")
+        elif line.startswith("#fields"):
             names = line[1:].split(sep)[1:]
-        elif line.startswith('#types'):
+        elif line.startswith("#types"):
             break
-        elif not line.startswith('#') and linenum == 0:
+        elif not line.startswith("#") and linenum == 0:
             if sep not in line:
                 # If not tab, assume comma.
-                sep = ','
+                sep = ","
             # Determine fieldnames from header
             # Also try to infer quoting style
             names = []
@@ -832,7 +843,7 @@ def read_csv(fp, mappers, ident):
     reader = csv.DictReader(fp, delimiter=sep, fieldnames=names, quoting=quoting)
     events = []
     for obj in reader:
-        if obj.get('ts') == '#close':  # Weird Zeek thing
+        if obj.get("ts") == "#close":  # Weird Zeek thing
             break
         events.append(obj)
     return process_events(events, mappers, ident)
@@ -857,11 +868,11 @@ def read_log(fp, mappers, ident):
 
 
 def detect_filetype(input_file):
-    if input_file.endswith('.csv'):
+    if input_file.endswith(".csv"):
         read_func = read_csv
-    elif input_file.endswith('.json'):
+    elif input_file.endswith(".json"):
         read_func = read_json
-    elif input_file.endswith('.log'):
+    elif input_file.endswith(".log"):
         read_func = read_log
     else:
         raise NotImplementedError
@@ -870,14 +881,16 @@ def detect_filetype(input_file):
 
 def convert_to_stix(input_file):
     now = timefmt(datetime.datetime.utcnow())
-    id1 = OrderedDict({
-        "type": "identity",
-        "identity_class": "program",
-        "name": "woodchipper",  # TODO: pass this in as arg
-        "id": "identity--" + str(uuid.uuid4()),
-        "created": now,
-        "modified": now,
-    })
+    id1 = OrderedDict(
+        {
+            "type": "identity",
+            "identity_class": "program",
+            "name": "woodchipper",  # TODO: pass this in as arg
+            "id": "identity--" + str(uuid.uuid4()),
+            "created": now,
+            "modified": now,
+        }
+    )
 
     mappers = [
         SdsMapper(),
@@ -889,15 +902,15 @@ def convert_to_stix(input_file):
 
     # TODO: STIX 2.1
     bundle = {
-        'type': 'bundle',
-        'id': 'bundle--' + str(uuid.uuid4()),
-        'spec_version': '2.0',  # TODO: If 2.1, omit this property
-        'objects': []
+        "type": "bundle",
+        "id": "bundle--" + str(uuid.uuid4()),
+        "spec_version": "2.0",  # TODO: If 2.1, omit this property
+        "objects": [],
     }
     objects = [id1]
 
     try:
-        if input_file.endswith('.zip'):
+        if input_file.endswith(".zip"):
             zf = zipfile.ZipFile(input_file)
             for filename in zf.namelist():
                 try:
@@ -906,17 +919,17 @@ def convert_to_stix(input_file):
                     break
                 except NotImplementedError:
                     pass
-            fp = zf.open(input_file, 'r')
+            fp = zf.open(input_file, "r")
         else:
             read_func = detect_filetype(input_file)
-            fp = open(input_file, 'r')
+            fp = open(input_file, "r")
 
         objects += read_func(fp, mappers, id1)
     except Exception as e:
         fp.close()
         raise e
 
-    bundle['objects'] = objects
+    bundle["objects"] = objects
 
     return bundle
 
@@ -924,11 +937,11 @@ def convert_to_stix(input_file):
 def convert(input_file, output_file=None):
     bundle = convert_to_stix(input_file)
     if output_file:
-        with open(output_file, 'w') as fp:
+        with open(output_file, "w") as fp:
             json.dump(bundle, fp, indent=4, ensure_ascii=False)
     else:
         print(json.dumps(bundle, indent=4, ensure_ascii=False))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     convert(sys.argv[1])
