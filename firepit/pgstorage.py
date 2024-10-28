@@ -244,7 +244,14 @@ class PgStorage(SqlStorage):
         if not values:
             values = ()
         try:
-            cursor.execute(query, values)
+            # if fails for 1st time retry with connection rollback
+
+            try:
+                cursor.execute(query, values)
+            except Exception as e:
+                logger.error("Error happened, retrying with connection rollback")
+                self.connection.rollback()
+                cursor.execute(query, values)
         except psycopg2.errors.UndefinedColumn as e:
             self.connection.rollback()
             raise InvalidAttr(str(e)) from e
