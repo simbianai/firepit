@@ -184,6 +184,8 @@ class PgStorage(SqlStorage):
             for stmt in INTERNAL_TABLES:
                 self._execute(stmt, cursor)
 
+            self._create_indexes(cursor)
+
             # Record db version
             self._set_meta(cursor, "dbversion", DB_VERSION)
 
@@ -192,6 +194,82 @@ class PgStorage(SqlStorage):
         except (psycopg2.errors.DuplicateFunction, psycopg2.errors.UniqueViolation):
             # We probably already created all these, so ignore this
             self.connection.rollback()
+
+    def _create_indexes(self, cursor):
+        """Create necessary indexes for performance optimization"""
+        try:
+            # Indexes for internal tables
+            index_definitions = [
+                # __contains table indexes
+                (
+                    'CREATE INDEX IF NOT EXISTS contains_source_idx ON "__contains" (source_ref);'
+                ),
+                (
+                    'CREATE INDEX IF NOT EXISTS contains_target_idx ON "__contains" (target_ref);'
+                ),
+                (
+                    'CREATE INDEX IF NOT EXISTS contains_rank_idx ON "__contains" (x_firepit_rank);'
+                ),
+                # __queries table indexes
+                ('CREATE INDEX IF NOT EXISTS queries_sco_idx ON "__queries" (sco_id);'),
+                (
+                    'CREATE INDEX IF NOT EXISTS queries_query_idx ON "__queries" (query_id);'
+                ),
+                # __columns table indexes
+                (
+                    'CREATE INDEX IF NOT EXISTS columns_otype_idx ON "__columns" (otype);'
+                ),
+                ('CREATE INDEX IF NOT EXISTS columns_path_idx ON "__columns" (path);'),
+                # identity table indexes
+                ('CREATE INDEX IF NOT EXISTS identity_name_idx ON "identity" (name);'),
+                (
+                    'CREATE INDEX IF NOT EXISTS identity_class_idx ON "identity" (identity_class);'
+                ),
+                (
+                    'CREATE INDEX IF NOT EXISTS identity_created_idx ON "identity" (created);'
+                ),
+                (
+                    'CREATE INDEX IF NOT EXISTS identity_modified_idx ON "identity" (modified);'
+                ),
+                # observed-data table indexes
+                (
+                    'CREATE INDEX IF NOT EXISTS od_created_by_ref_idx ON "observed-data" (created_by_ref);'
+                ),
+                (
+                    'CREATE INDEX IF NOT EXISTS od_created_idx ON "observed-data" (created);'
+                ),
+                (
+                    'CREATE INDEX IF NOT EXISTS od_modified_idx ON "observed-data" (modified);'
+                ),
+                (
+                    'CREATE INDEX IF NOT EXISTS od_first_observed_idx ON "observed-data" (first_observed);'
+                ),
+                (
+                    'CREATE INDEX IF NOT EXISTS od_last_observed_idx ON "observed-data" (last_observed);'
+                ),
+                # Composite indexes for observed-data
+                (
+                    'CREATE INDEX IF NOT EXISTS od_observed_range_idx ON "observed-data" (first_observed, last_observed);'
+                ),
+                (
+                    'CREATE INDEX IF NOT EXISTS od_created_modified_idx ON "observed-data" (created, modified);'
+                ),
+            ]
+
+            for index_stmt in index_definitions:
+                logging.info(f"Creating index: {index_stmt}")
+                try:
+                    self._execute(index_stmt, cursor)
+                except psycopg2.Error as e:
+                    logging.warning(f"Failed to create index: {str(e)}")
+                    # Continue with other indexes even if one fails
+                    continue
+
+            logging.info("Successfully created database indexes")
+
+        except Exception as e:
+            logging.exception(f"Error creating indexes: {str(e)}")
+            raise
 
     def _migrate(self, version, cursor):
         if version == "2":
