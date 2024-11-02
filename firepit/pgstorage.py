@@ -276,6 +276,7 @@ class PgStorage(SqlStorage):
         try:
             cursor = self._execute(stmt)
             if not self.defer_index:
+                logger.info("Creating index for %s", tablename)
                 self._create_index(tablename, cursor)
             self.connection.commit()
             cursor.close()
