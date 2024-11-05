@@ -2,10 +2,14 @@ import logging
 import os
 import re
 from functools import lru_cache
+import threading
 
 import psycopg2
 import psycopg2.extras
+import psycopg2.pool
 import ujson
+from psycopg2.pool import ThreadedConnectionPool
+
 
 from firepit.exceptions import DuplicateTable
 from firepit.exceptions import InvalidAttr
@@ -115,6 +119,10 @@ class TuplesToTextIO:
 
 
 class PgStorage(SqlStorage):
+    # Class-level connection pool
+    _connection_pool = None
+    _pool_lock = threading.Lock()
+
     def __init__(self, dbname, url, session_id=None):
         super().__init__()
         self.placeholder = "%s"
@@ -131,9 +139,21 @@ class PgStorage(SqlStorage):
         options = f"options=--search-path%3D{session_id}"
         sep = "&" if "?" in url else "?"
         connstring = f"{url}{sep}{options}"
-        self.connection = psycopg2.connect(
-            connstring, cursor_factory=psycopg2.extras.RealDictCursor
-        )
+        max_pool = os.getenv("FIREPIT_MAX_DB_POOL", 5)
+        logger.debug("Max DB pool size: %s", max_pool)
+        # Initialize the connection pool if it doesn't exist
+        with self._pool_lock:
+            if self._connection_pool is None:
+                self._connection_pool = ThreadedConnectionPool(
+                    minconn=1,
+                    maxconn=max_pool,  # Adjust the max connections as needed
+                    dsn=connstring,
+                    cursor_factory=psycopg2.extras.RealDictCursor,
+                )
+
+        # Get a connection from the pool
+        self.connection = self._connection_pool.getconn()
+        self.connection.autocommit = False
 
         self._create_firepit_common_schema()
         if session_id:
@@ -153,6 +173,15 @@ class PgStorage(SqlStorage):
             self._checkdb()
 
         logger.debug("Connection to PostgreSQL DB %s successful", dbname)
+
+    def close(self):
+        # Return the connection to the pool
+        if self.connection:
+            self._connection_pool.putconn(self.connection)
+            self.connection = None
+
+    def __del__(self):
+        self.close()
 
     def _create_firepit_common_schema(self):
         try:
