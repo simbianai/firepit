@@ -137,7 +137,7 @@ class PgStorage(SqlStorage):
         options = f"options=--search-path%3D{session_id}"
         sep = "&" if "?" in url else "?"
         connstring = f"{url}{sep}{options}"
-        max_pool = os.getenv("FIREPIT_MAX_DB_POOL", 5)
+        max_pool = os.getenv("FIREPIT_MAX_DB_POOL", 100)
         logger.debug("Max DB pool size: %s", max_pool)
 
         with self._pool_lock:
