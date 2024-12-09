@@ -140,16 +140,16 @@ class PgStorage(SqlStorage):
         max_pool = os.getenv("FIREPIT_MAX_DB_POOL", 100)
         logger.debug("Max DB pool size: %s", max_pool)
 
-        with self._pool_lock:
-            if self._connection_pool is None:
-                self._connection_pool = ThreadedConnectionPool(
+        with PgStorage._pool_lock:
+            if PgStorage._connection_pool is None:
+                PgStorage._connection_pool = ThreadedConnectionPool(
                     minconn=1,
                     maxconn=max_pool,
                     dsn=connstring,
                     cursor_factory=psycopg2.extras.RealDictCursor,
                 )
 
-        self.connection = self._connection_pool.getconn()
+        self.connection = PgStorage._connection_pool.getconn()
         self.connection.autocommit = False
 
         self._create_firepit_common_schema()
@@ -184,7 +184,7 @@ class PgStorage(SqlStorage):
                 self.connection.rollback()
             except Exception:
                 pass
-            self._connection_pool.putconn(self.connection)
+            PgStorage._connection_pool.putconn(self.connection)
             self.connection = None
 
     def __enter__(self):
