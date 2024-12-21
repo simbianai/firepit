@@ -230,6 +230,7 @@ class PgStorage(SqlStorage):
             index_definitions = [
                 'CREATE INDEX IF NOT EXISTS contains_source_idx ON "__contains" (source_ref);',
                 'CREATE INDEX IF NOT EXISTS contains_target_idx ON "__contains" (target_ref);',
+                'CREATE INDEX IF NOT EXISTS contains_source_target_idx ON "__contains" (source_ref, target_ref);',
                 'CREATE INDEX IF NOT EXISTS contains_rank_idx ON "__contains" (x_firepit_rank);',
                 'CREATE INDEX IF NOT EXISTS queries_sco_idx ON "__queries" (sco_id);',
                 'CREATE INDEX IF NOT EXISTS queries_query_idx ON "__queries" (query_id);',
@@ -245,7 +246,10 @@ class PgStorage(SqlStorage):
                 'CREATE INDEX IF NOT EXISTS od_first_observed_idx ON "observed-data" (first_observed);',
                 'CREATE INDEX IF NOT EXISTS od_last_observed_idx ON "observed-data" (last_observed);',
                 'CREATE INDEX IF NOT EXISTS od_observed_range_idx ON "observed-data" (first_observed, last_observed);',
+                'CREATE INDEX IF NOT EXISTS od_composite_idx ON "observed-data" (id, first_observed, last_observed);',
+                'CREATE INDEX IF NOT EXISTS od_id_covering_idx ON "observed-data" (id) INCLUDE (first_observed, last_observed);',
                 'CREATE INDEX IF NOT EXISTS od_created_modified_idx ON "observed-data" (created, modified);',
+                'CREATE INDEX IF NOT EXISTS observed_data_id_idx ON "observed-data" (id);',
             ]
 
             for index_stmt in index_definitions:

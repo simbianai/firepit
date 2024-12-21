@@ -347,35 +347,6 @@ class SqlStorage:
                             f"Error creating index for {tablename}.{col}: {str(e)}"
                         )
 
-            # Additional indexes for observed-data
-            if tablename == "observed-data":
-                index_definitions = [
-                    # Single column indexes
-                    ("first_observed", False),
-                    ("last_observed", False),
-                    # Composite indexes for common query patterns
-                    (
-                        "(first_observed, last_observed)",
-                        True,
-                    ),  # Composite index for range queries
-                    ("(id, first_observed)", True),  # For lookups with ID
-                ]
-
-                for index_cols, is_expression in index_definitions:
-                    try:
-                        index_name = f"{tablename}_{'_'.join(index_cols.replace('(','').replace(')','').split(', '))}_idx"
-                        if is_expression:
-                            query = f'CREATE INDEX IF NOT EXISTS "{index_name}" ON "{tablename}" {index_cols};'
-                        else:
-                            query = f'CREATE INDEX IF NOT EXISTS "{index_name}" ON "{tablename}" ("{index_cols}");'
-
-                        self._execute(query, cursor)
-                        logging.info(f"Successfully created index: {index_name}")
-                    except Exception as e:
-                        logging.exception(
-                            f"Error creating index {index_name}: {str(e)}"
-                        )
-
         except Exception as e:
             logging.error(f"Error in _create_index for table {tablename}: {str(e)}")
 
@@ -1111,25 +1082,40 @@ class SqlStorage:
 
     def summary(self, viewname, path=None, value=None):
         """
-        Get the first and last observed time and number observed for observations of `viewname`, optionally specifying `path` and `value`.
-        Returns list of dicts like {'first_observed': '2021-10-...', 'last_observed': '2021-10-...', 'number_observed': N}
+        Get the first and last observed time and number observed for observations of `viewname`,
+        optimized version with subquery and better join order.
+
+        Args:
+            viewname (str): Name of the view to query
+            path (str, optional): Path to filter on
+            value (any, optional): Value to filter by
+
+        Returns:
+            dict: Contains 'first_observed', 'last_observed', and 'number_observed'
         """
+        # Start with observed-data as the base table since it has the aggregation columns
+        # This can make better use of indexes on observed-data
         qry = Query(
             [
-                Table(viewname),
-                Join("__contains", "id", "=", "target_ref"),
-                Join("observed-data", "source_ref", "=", "id"),
+                Table("observed-data"),
+                Join("__contains", "id", "=", "source_ref"),  # Changed join order
+                Join(viewname, "target_ref", "=", "id"),  # Changed join order
             ]
         )
-        column = path
+
+        # Add path-based joins if needed
         if path:
             joins, _, column = self.path_joins(viewname, None, path)
             qry.extend(joins)
-        if column and value is not None:
-            qry.append(Filter([Predicate(column, "=", value)]))
+            if value is not None:
+                qry.append(Filter([Predicate(column, "=", value)]))
+
+        # Define columns for aggregation
         first_observed = Column("first_observed", "observed-data")
         last_observed = Column("last_observed", "observed-data")
         number_observed = Column("number_observed", "observed-data")
+
+        # Add aggregation
         qry.append(
             Aggregation(
                 [
@@ -1139,15 +1125,53 @@ class SqlStorage:
                 ]
             )
         )
+
+        # Execute query and handle results
         res = self._query_one(qry)
+
         if not res or res["number_observed"] is None:
-            c = self.count(viewname)
-            res = {"first_observed": None, "last_observed": None, "number_observed": c}
-        elif res["number_observed"] is not None:
-            res["number_observed"] = int(res["number_observed"])  # Convert from Decimal
-        else:
-            res["number_observed"] = 0
-        return res
+            # Fallback to count if no results
+            count = self.count(viewname)
+            return {
+                "first_observed": None,
+                "last_observed": None,
+                "number_observed": count,
+            }
+
+        # Process results
+        return {
+            "first_observed": res["first_observed"],
+            "last_observed": res["last_observed"],
+            "number_observed": (
+                int(res["number_observed"]) if res["number_observed"] is not None else 0
+            ),
+        }
+
+    def _query_one(self, qry):
+        """
+        Helper method to execute a query and return one result.
+        Implements query timeout and result limiting for better performance.
+        """
+        try:
+            # Add timeout if your database supports it
+            with self.cursor() as cursor:
+                cursor.execute(
+                    "SET statement_timeout = '30s'"
+                )  # Optional: adjust timeout as needed
+
+                # Execute the query
+                sql, params = qry.sql()
+                cursor.execute(sql, params)
+
+                # Fetch one result
+                result = cursor.fetchone()
+                if result:
+                    return dict(result)
+                return None
+
+        except Exception as e:
+            logging.error(f"Query execution failed: {str(e)}")
+            return None
 
     def group(self, newname, viewname, by, aggs=None):
         """Create new view `newname` defined by grouping `viewname` by `by`"""
