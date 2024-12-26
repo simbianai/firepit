@@ -1147,32 +1147,6 @@ class SqlStorage:
             ),
         }
 
-    def _query_one(self, qry):
-        """
-        Helper method to execute a query and return one result.
-        Implements query timeout and result limiting for better performance.
-        """
-        try:
-            # Add timeout if your database supports it
-            with self.cursor() as cursor:
-                cursor.execute(
-                    "SET statement_timeout = '30s'"
-                )  # Optional: adjust timeout as needed
-
-                # Execute the query
-                sql, params = qry.sql()
-                cursor.execute(sql, params)
-
-                # Fetch one result
-                result = cursor.fetchone()
-                if result:
-                    return dict(result)
-                return None
-
-        except Exception as e:
-            logging.error(f"Query execution failed: {str(e)}")
-            return None
-
     def group(self, newname, viewname, by, aggs=None):
         """Create new view `newname` defined by grouping `viewname` by `by`"""
         if not isinstance(by, list):
