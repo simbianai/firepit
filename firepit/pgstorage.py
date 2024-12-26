@@ -3,6 +3,7 @@ import os
 import re
 from functools import lru_cache
 import threading
+import time
 
 import psycopg2
 import psycopg2.extras
@@ -307,20 +308,21 @@ class PgStorage(SqlStorage):
 
     def _query(self, query, values=None, cursor=None):
         logger.debug("Executing query: %s", query)
+        start_time = time.time()
         cursor_provided = cursor is not None
         if not cursor_provided:
             cursor = self.connection.cursor()
+        max_timout = os.getenv("FIREPIT_MAX_QUERY_TIME", 4000)
+        try:
+            cursor.execute(f"SET statement_timeout TO {max_timout}")
+        except Exception as e:
+            logger.error(f"Error setting statement timeout: {e}")
 
         if not values:
             values = ()
 
         try:
-            try:
-                cursor.execute(query, values)
-            except Exception:
-                logger.error("Error happened, retrying with connection rollback")
-                self.connection.rollback()
-                cursor.execute(query, values)
+            cursor.execute(query, values)
         except psycopg2.errors.UndefinedColumn as e:
             self.connection.rollback()
             if not cursor_provided:
@@ -338,6 +340,10 @@ class PgStorage(SqlStorage):
             logger.error("%s: %s", query, e, exc_info=e)
             raise UnexpectedError(str(e)) from e
 
+        end_time = time.time()
+        logger.debug(
+            f"_Query {str(query)} execution time: {end_time - start_time} seconds"
+        )
         self.connection.commit()
         return cursor
 
@@ -353,7 +359,7 @@ class PgStorage(SqlStorage):
             with self.connection.cursor() as cursor:
                 self._execute(stmt, cursor=cursor)
                 if not self.defer_index:
-                    logger.info("Creating index for %s", tablename)
+                    logger.debug("Creating index for %s", tablename)
                     self._create_index(tablename, cursor)
                 self.connection.commit()
         except (

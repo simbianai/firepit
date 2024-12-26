@@ -1,5 +1,6 @@
 import logging
 import re
+import time
 import uuid
 
 from collections import defaultdict
@@ -170,6 +171,7 @@ class SqlStorage:
 
         # Python-to-SQL type mapper
         self.infer_type = infer_type
+        self._summary_cache = {}  # Cache for summary results
 
     def close(self):
         if self.connection:
@@ -265,13 +267,23 @@ class SqlStorage:
 
     def _query(self, query, values=None, cursor=None):
         """Private wrapper for logging SQL query"""
+        start_time = time.time()
         logger.debug("Executing query: %s", query)
         if not cursor:
             cursor = self.connection.cursor()
+        try:
+            cursor.execute("SET statement_timeout TO 5000")  # 5000ms = 5 seconds
+        except Exception as e:
+            logger.error(f"Error setting statement timeout: {e}")
+
         if not values:
             values = ()
         cursor.execute(query, values)
         self.connection.commit()
+        end_time = time.time()
+        logger.debug(
+            f"_query query: {str(query)} execution time: {end_time - start_time} seconds"
+        )
         return cursor
 
     def _select(
@@ -965,9 +977,14 @@ class SqlStorage:
     def _query_one(self, qry):
         # Utility func for `number_observed()` and `summary()`
         try:
+            start_time = time.time()
             cursor = self.run_query(qry)
             res = cursor.fetchone()
             cursor.close()
+            end_time = time.time()
+            logger.debug(
+                f"_query_one query: {str(qry)} execution time: {end_time - start_time} seconds"
+            )
         except UnknownViewname as e:
             # Probably __contains, if no observed-data has been loaded
             logger.warning("Missing table: %s", e)
@@ -982,6 +999,7 @@ class SqlStorage:
         Get the count of observations of `value` in `viewname`.`path`
         Returns integer count
         """
+        start_time = time.time()
         qry = Query(
             [
                 Table(viewname),
@@ -999,6 +1017,10 @@ class SqlStorage:
             count = int(res["count"]) if res["count"] else 0
         else:
             count = self.count(viewname)
+        end_time = time.time()
+        logger.debug(
+            f"number_observed query: {str(qry)} execution time: {end_time - start_time} seconds"
+        )
         return count
 
     def extract_observeddata_attribute(
@@ -1080,10 +1102,23 @@ class SqlStorage:
             viewname, timestamp, path, value, limit, run
         )
 
+    def _get_cache_key(self, viewname, path=None, value=None):
+        """Generate a unique cache key that properly handles None values"""
+        # For viewname (should never be None, but being defensive)
+        if viewname is None:
+            raise ValueError("viewname cannot be None")
+
+        # For path and value, use empty string to represent None
+        # This ensures "abc:None:123" and "abc::123" don't collide
+        safe_path = "" if path is None else str(path)
+        safe_value = "" if value is None else str(value)
+
+        return f"{viewname}:{safe_path}:{safe_value}"
+
     def summary(self, viewname, path=None, value=None):
         """
         Get the first and last observed time and number observed for observations of `viewname`,
-        optimized version with subquery and better join order.
+        with simple caching support.
 
         Args:
             viewname (str): Name of the view to query
@@ -1093,13 +1128,29 @@ class SqlStorage:
         Returns:
             dict: Contains 'first_observed', 'last_observed', and 'number_observed'
         """
-        # Start with observed-data as the base table since it has the aggregation columns
-        # This can make better use of indexes on observed-data
+        start_time = time.time()
+
+        # Generate cache key
+        cache_key = self._get_cache_key(viewname, path, value)
+
+        # Return cached result if available
+        if cache_key in self._summary_cache:
+            logger.debug(f"Cache hit for summary: {cache_key}")
+            end_time = time.time()
+            logger.debug(
+                f"Summary (cached) execution time: {end_time - start_time} seconds"
+            )
+            return self._summary_cache[cache_key]
+
+        # If not in cache, calculate summary
+        logger.debug(f"Cache miss for summary: {cache_key}")
+
+        # Start with observed-data as the base table
         qry = Query(
             [
                 Table("observed-data"),
-                Join("__contains", "id", "=", "source_ref"),  # Changed join order
-                Join(viewname, "target_ref", "=", "id"),  # Changed join order
+                Join("__contains", "id", "=", "source_ref"),
+                Join(viewname, "target_ref", "=", "id"),
             ]
         )
 
@@ -1127,25 +1178,41 @@ class SqlStorage:
         )
 
         # Execute query and handle results
-        res = self._query_one(qry)
+        try:
+            res = self._query_one(qry)
+        except Exception as e:
+            logger.error(f"Error executing query: {e}")
+            res = None
 
-        if not res or res["number_observed"] is None:
+        # Process results
+        if not res or "number_observed" not in res or res["number_observed"] is None:
             # Fallback to count if no results
             count = self.count(viewname)
-            return {
+            result = {
                 "first_observed": None,
                 "last_observed": None,
                 "number_observed": count,
             }
+        else:
+            result = {
+                "first_observed": res["first_observed"],
+                "last_observed": res["last_observed"],
+                "number_observed": (
+                    int(res["number_observed"])
+                    if res["number_observed"] is not None
+                    else 0
+                ),
+            }
 
-        # Process results
-        return {
-            "first_observed": res["first_observed"],
-            "last_observed": res["last_observed"],
-            "number_observed": (
-                int(res["number_observed"]) if res["number_observed"] is not None else 0
-            ),
-        }
+        # Cache the result
+        self._summary_cache[cache_key] = result
+
+        end_time = time.time()
+        logger.debug(
+            f"Summary query {str(qry)} execution time: {end_time - start_time} seconds"
+        )
+
+        return result
 
     def group(self, newname, viewname, by, aggs=None):
         """Create new view `newname` defined by grouping `viewname` by `by`"""
