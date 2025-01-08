@@ -22,17 +22,48 @@ logger = logging.getLogger(__name__)
 
 
 def _make_join(col_dict, lhs, ref, rhs, path, proj):
-    # Use the `ref` prop as the alias for table `rhs`
-    # Important because e.g. network-traffic needs to JOIN ipv4-addr twice
-    alias = ".".join(path).replace(".", "__")
-    proj.extend(
-        [
-            Column(c, alias, ".".join(path + [c]))
-            for c in col_dict[rhs]
-            if c != ref and not c.endswith("_ref")
-        ]
-    )
-    return Join(rhs, ref, "=", "id", how="LEFT OUTER", alias=alias, lhs=lhs)
+    """
+    Create a JOIN clause with error handling for column dictionary access.
+
+    Args:
+        col_dict (dict): Dictionary mapping table names to their columns
+        lhs (str): Left-hand side table name
+        ref (str): Reference column name
+        rhs (str): Right-hand side table name
+        path (list): List of path components for column aliasing
+        proj (list): List to store column projections
+
+    Returns:
+        Join: A Join object with the specified parameters
+    """
+    try:
+        # Create alias by joining path components
+        alias = ".".join(path).replace(".", "__")
+
+        # Safely get columns for the right-hand table
+        columns = col_dict.get(rhs, [])
+
+        # Only attempt to add columns if we successfully got them from col_dict
+        if columns:
+            try:
+                # Add columns to projection, skipping any that cause errors
+                for c in columns:
+                    try:
+                        if c != ref and not c.endswith("_ref"):
+                            proj.append(Column(c, alias, ".".join(path + [c])))
+                    except Exception as e:
+                        # Log or handle individual column errors if needed
+                        continue
+            except Exception as e:
+                # Log or handle projection creation errors if needed
+                pass
+
+        # Create and return Join object regardless of whether projections succeeded
+        return Join(rhs, ref, "=", "id", how="LEFT OUTER", alias=alias, lhs=lhs)
+
+    except Exception as e:
+        # If everything fails, return a minimal Join object
+        return Join(rhs, ref, "=", "id", how="LEFT OUTER", lhs=lhs)
 
 
 def _join_ip_tables(col_dict, qry, path, proj, prop, prev_table):
@@ -157,6 +188,7 @@ def auto_deref_cached(view, cols, col_dict, ignore=None, paths=None):
                 # special case for concurrent ipv4 and 6
                 _join_ip_tables(col_dict, joins, path, proj, node.edge, parent)
             else:
+
                 joins.append(
                     _make_join(col_dict, parent, node.edge, node.name, path, proj)
                 )
