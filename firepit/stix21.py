@@ -71,7 +71,8 @@ def makeid(sco, obs=None):
         elif prop in sco:
             value = sco[prop]
             if prop.endswith('_ref') and obs:  # Hook for STIX 2.0 SCOs
-                target = obs['objects'].get(value)
+                lookup_key = value.get('value') if isinstance(value, dict) else value
+                target = obs['objects'].get(lookup_key)
                 if target:
                     value = makeid(target)
                     contrib[prop] = value
